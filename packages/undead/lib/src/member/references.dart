@@ -3,7 +3,9 @@ import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:analyzer/dart/element/element.dart';
 import 'package:analyzer/dart/element/type.dart';
 
+import 'flow.dart';
 import 'graph.dart';
+import 'origins.dart';
 
 /// Collects body effects without collapsing a member into its declaring class.
 /// Shape walks retain signatures but never walk executable bodies/initializers.
@@ -13,6 +15,7 @@ class MemberReferences extends RecursiveAstVisitor<void> {
   final LibraryElement library;
   final bool shapeOnly;
   final Element? sourceElement;
+  late final origins = ReceiverOrigins(graph, edges, sourceElement);
   MemberReferences(
     this.graph,
     this.edges,
@@ -21,13 +24,23 @@ class MemberReferences extends RecursiveAstVisitor<void> {
     this.sourceElement,
   });
 
-  void reference(Element? raw, {bool direct = false}) {
+  void reference(
+    Element? raw, {
+    bool direct = false,
+    ReceiverOrigin? receiver,
+    List<CallArgument> arguments = const [],
+  }) {
     if (raw == null) return;
     final element = raw.baseElement;
     _sdkJsonProtocol(element);
     if (element is MultiplyDefinedElement) {
       for (final conflicting in element.conflictingElements) {
-        reference(conflicting, direct: direct);
+        reference(
+          conflicting,
+          direct: direct,
+          receiver: receiver,
+          arguments: arguments,
+        );
       }
       return;
     }
@@ -35,10 +48,13 @@ class MemberReferences extends RecursiveAstVisitor<void> {
       _constructor(element, direct);
       return;
     }
-    if (element is ExecutableElement && _dispatch(element, direct)) return;
+    if (element is ExecutableElement &&
+        _dispatch(element, direct, receiver, arguments)) {
+      return;
+    }
+    origins.bindCall(element, arguments);
     if (element is LocalVariableElement ||
         element is FormalParameterElement ||
-        element is LocalFunctionElement ||
         element is TypeParameterElement) {
       return;
     }
@@ -64,7 +80,9 @@ class MemberReferences extends RecursiveAstVisitor<void> {
     // graph has no value flow for encoder configuration/container contents, so
     // conservatively retain this selector on allocated receivers. Keeping the
     // edge on the referencing node preserves production/test separation.
-    edges.slots.add(DispatchSlot(null, 'toJson', library, DispatchKind.method));
+    edges.slots.add(
+      DispatchSlot(null, 'toJson', library, DispatchKind.method, assumed: true),
+    );
     final source =
         graph.nodes[sourceElement == null ? '' : elementKey(sourceElement!)];
     graph.limitation(
@@ -85,7 +103,12 @@ class MemberReferences extends RecursiveAstVisitor<void> {
     }
   }
 
-  bool _dispatch(ExecutableElement element, bool direct) {
+  bool _dispatch(
+    ExecutableElement element,
+    bool direct,
+    ReceiverOrigin? receiver,
+    List<CallArgument> arguments,
+  ) {
     final sourceOwner = sourceElement?.enclosingElement;
     if (direct && sourceOwner is MixinElement) {
       edges.slots.add(
@@ -94,6 +117,8 @@ class MemberReferences extends RecursiveAstVisitor<void> {
           element is MethodElement ? element.lookupName! : element.name!,
           library,
           DispatchKind.of(element).asSuper,
+          receiver: receiver ?? ReceiverOrigin.unknownValue,
+          arguments: arguments,
         ),
       );
       return true;
@@ -106,6 +131,8 @@ class MemberReferences extends RecursiveAstVisitor<void> {
           element is MethodElement ? element.lookupName! : element.name!,
           library,
           DispatchKind.of(element),
+          receiver: receiver ?? ReceiverOrigin.unknownValue,
+          arguments: arguments,
         ),
       );
       return true;
@@ -115,6 +142,14 @@ class MemberReferences extends RecursiveAstVisitor<void> {
 
   @override
   void visitComment(Comment node) {}
+
+  @override
+  void visitFunctionDeclaration(FunctionDeclaration node) {
+    final element = node.declaredFragment?.element;
+    if (element is LocalFunctionElement && element != sourceElement) return;
+    super.visitFunctionDeclaration(node);
+  }
+
   @override
   void visitNamedType(NamedType node) {
     reference(node.element);
@@ -125,28 +160,50 @@ class MemberReferences extends RecursiveAstVisitor<void> {
   void visitSimpleIdentifier(SimpleIdentifier node) {
     if (!node.inDeclarationContext()) {
       final parent = node.parent;
+      if (parent is MethodInvocation && parent.methodName == node) return;
       final direct =
-          (parent is MethodInvocation &&
-              parent.realTarget is SuperExpression) ||
-          (parent is PropertyAccess && parent.realTarget is SuperExpression);
-      reference(node.element, direct: direct);
+          parent is PropertyAccess && parent.realTarget is SuperExpression;
+      final target = switch (parent) {
+        PropertyAccess(:final realTarget) => realTarget,
+        PrefixedIdentifier(:final prefix) => prefix,
+        _ => null,
+      };
+      reference(
+        node.element,
+        direct: direct,
+        receiver: target == null
+            ? origins.implicitReceiver
+            : origins.value(target),
+      );
       if (node.element == null &&
           (parent is PrefixedIdentifier || parent is PropertyAccess)) {
-        _dynamicProperty(node);
+        _dynamicProperty(node, origins.value(target));
       }
     }
     super.visitSimpleIdentifier(node);
   }
 
-  void _dynamicProperty(SimpleIdentifier node) {
+  void _dynamicProperty(SimpleIdentifier node, ReceiverOrigin receiver) {
     if (node.inGetterContext()) {
       edges.slots.add(
-        DispatchSlot(null, node.name, library, DispatchKind.getter),
+        DispatchSlot(
+          null,
+          node.name,
+          library,
+          DispatchKind.getter,
+          receiver: receiver,
+        ),
       );
     }
     if (node.inSetterContext()) {
       edges.slots.add(
-        DispatchSlot(null, node.name, library, DispatchKind.setter),
+        DispatchSlot(
+          null,
+          node.name,
+          library,
+          DispatchKind.setter,
+          receiver: receiver,
+        ),
       );
     }
     _dynamicLimitation();
@@ -177,9 +234,26 @@ class MemberReferences extends RecursiveAstVisitor<void> {
 
   @override
   void visitMethodInvocation(MethodInvocation node) {
+    final receiver = node.realTarget == null
+        ? origins.implicitReceiver
+        : origins.value(node.realTarget);
+    final arguments = origins.arguments(node.argumentList);
+    reference(
+      node.methodName.element,
+      direct: node.realTarget is SuperExpression,
+      receiver: receiver,
+      arguments: arguments,
+    );
     if (node.methodName.element == null && node.realTarget != null) {
       edges.slots.add(
-        DispatchSlot(null, node.methodName.name, library, DispatchKind.method),
+        DispatchSlot(
+          null,
+          node.methodName.name,
+          library,
+          DispatchKind.method,
+          receiver: receiver,
+          arguments: arguments,
+        ),
       );
       _dynamicLimitation();
     }
@@ -235,6 +309,10 @@ class MemberReferences extends RecursiveAstVisitor<void> {
 
   @override
   void visitInstanceCreationExpression(InstanceCreationExpression node) {
+    origins.bindCall(
+      node.constructorName.element,
+      origins.arguments(node.argumentList),
+    );
     _externalBoundary(
       node.constructorName.element,
       node.argumentList.arguments,
@@ -245,9 +323,22 @@ class MemberReferences extends RecursiveAstVisitor<void> {
 
   @override
   void visitFunctionExpressionInvocation(FunctionExpressionInvocation node) {
-    reference(node.element);
+    reference(
+      node.element,
+      receiver: origins.value(node.function),
+      arguments: origins.arguments(node.argumentList),
+    );
     if (node.element == null && node.function.staticType is DynamicType) {
-      edges.slots.add(DispatchSlot(null, 'call', library, DispatchKind.method));
+      edges.slots.add(
+        DispatchSlot(
+          null,
+          'call',
+          library,
+          DispatchKind.method,
+          receiver: origins.value(node.function),
+          arguments: origins.arguments(node.argumentList),
+        ),
+      );
       _dynamicLimitation();
     }
     _externalBoundary(
@@ -301,11 +392,27 @@ class MemberReferences extends RecursiveAstVisitor<void> {
 
   @override
   void visitVariableDeclaration(VariableDeclaration node) {
-    if (!shapeOnly) super.visitVariableDeclaration(node);
+    if (!shapeOnly) {
+      origins.variable(node);
+      super.visitVariableDeclaration(node);
+    }
+  }
+
+  @override
+  void visitReturnStatement(ReturnStatement node) {
+    origins.returned(node.expression, node);
+    super.visitReturnStatement(node);
+  }
+
+  @override
+  void visitExpressionFunctionBody(ExpressionFunctionBody node) {
+    origins.returned(node.expression, node);
+    super.visitExpressionFunctionBody(node);
   }
 
   @override
   void visitSuperConstructorInvocation(SuperConstructorInvocation node) {
+    origins.bindCall(node.element, origins.arguments(node.argumentList));
     reference(node.element, direct: true);
     super.visitSuperConstructorInvocation(node);
   }
@@ -314,6 +421,7 @@ class MemberReferences extends RecursiveAstVisitor<void> {
   void visitRedirectingConstructorInvocation(
     RedirectingConstructorInvocation node,
   ) {
+    origins.bindCall(node.element, origins.arguments(node.argumentList));
     reference(node.element);
     super.visitRedirectingConstructorInvocation(node);
   }
@@ -324,14 +432,29 @@ class MemberReferences extends RecursiveAstVisitor<void> {
     _ => false,
   };
 
+  ReceiverOrigin _accessReceiver(Expression expression) => switch (expression) {
+    PropertyAccess(:final realTarget) => origins.value(realTarget),
+    PrefixedIdentifier(:final prefix) => origins.value(prefix),
+    IndexExpression(:final realTarget) => origins.value(realTarget),
+    SimpleIdentifier() => origins.implicitReceiver,
+    _ => ReceiverOrigin.unknownValue,
+  };
+
   void _operator(
     Element? element,
     Expression receiver,
     String operator, {
     bool unary = false,
+    DartType? readType,
   }) {
-    reference(element, direct: receiver is SuperExpression);
-    if (element != null || receiver.staticType is! DynamicType) return;
+    reference(
+      element,
+      direct: receiver is SuperExpression,
+      receiver: origins.value(receiver),
+    );
+    if (element != null || (readType ?? receiver.staticType) is! DynamicType) {
+      return;
+    }
     var name = switch (operator) {
       '++' || '+=' => '+',
       '--' || '-=' => '-',
@@ -364,15 +487,37 @@ class MemberReferences extends RecursiveAstVisitor<void> {
       '>>>',
     };
     if (!selectors.contains(name)) return;
-    edges.slots.add(DispatchSlot(null, name, library, DispatchKind.method));
+    edges.slots.add(
+      DispatchSlot(
+        null,
+        name,
+        library,
+        DispatchKind.method,
+        receiver: origins.value(receiver),
+      ),
+    );
     _dynamicLimitation();
   }
 
   @override
   void visitAssignmentExpression(AssignmentExpression node) {
-    _operator(node.element, node.leftHandSide, node.operator.lexeme);
-    reference(node.readElement, direct: _isSuperAccess(node.leftHandSide));
-    reference(node.writeElement, direct: _isSuperAccess(node.leftHandSide));
+    if (!shapeOnly) origins.assignment(node);
+    _operator(
+      node.element,
+      node.leftHandSide,
+      node.operator.lexeme,
+      readType: node.readType,
+    );
+    reference(
+      node.readElement,
+      direct: _isSuperAccess(node.leftHandSide),
+      receiver: _accessReceiver(node.leftHandSide),
+    );
+    reference(
+      node.writeElement,
+      direct: _isSuperAccess(node.leftHandSide),
+      receiver: _accessReceiver(node.leftHandSide),
+    );
     super.visitAssignmentExpression(node);
   }
 
@@ -384,30 +529,81 @@ class MemberReferences extends RecursiveAstVisitor<void> {
 
   @override
   void visitPrefixExpression(PrefixExpression node) {
-    _operator(node.element, node.operand, node.operator.lexeme, unary: true);
-    reference(node.readElement, direct: _isSuperAccess(node.operand));
-    reference(node.writeElement, direct: _isSuperAccess(node.operand));
+    if (const {'++', '--'}.contains(node.operator.lexeme)) {
+      origins.update(node.operand);
+    }
+    _operator(
+      node.element,
+      node.operand,
+      node.operator.lexeme,
+      unary: true,
+      readType: node.readType,
+    );
+    reference(
+      node.readElement,
+      direct: _isSuperAccess(node.operand),
+      receiver: _accessReceiver(node.operand),
+    );
+    reference(
+      node.writeElement,
+      direct: _isSuperAccess(node.operand),
+      receiver: _accessReceiver(node.operand),
+    );
     super.visitPrefixExpression(node);
   }
 
   @override
   void visitPostfixExpression(PostfixExpression node) {
-    _operator(node.element, node.operand, node.operator.lexeme);
-    reference(node.readElement, direct: _isSuperAccess(node.operand));
-    reference(node.writeElement, direct: _isSuperAccess(node.operand));
+    if (const {'++', '--'}.contains(node.operator.lexeme)) {
+      origins.update(node.operand);
+    }
+    _operator(
+      node.element,
+      node.operand,
+      node.operator.lexeme,
+      readType: node.readType,
+    );
+    reference(
+      node.readElement,
+      direct: _isSuperAccess(node.operand),
+      receiver: _accessReceiver(node.operand),
+    );
+    reference(
+      node.writeElement,
+      direct: _isSuperAccess(node.operand),
+      receiver: _accessReceiver(node.operand),
+    );
     super.visitPostfixExpression(node);
   }
 
   @override
   void visitIndexExpression(IndexExpression node) {
-    reference(node.element, direct: node.realTarget is SuperExpression);
+    reference(
+      node.element,
+      direct: node.realTarget is SuperExpression,
+      receiver: origins.value(node.realTarget),
+    );
     if (node.element == null) {
       if (node.inGetterContext()) {
-        edges.slots.add(DispatchSlot(null, '[]', library, DispatchKind.method));
+        edges.slots.add(
+          DispatchSlot(
+            null,
+            '[]',
+            library,
+            DispatchKind.method,
+            receiver: origins.value(node.realTarget),
+          ),
+        );
       }
       if (node.inSetterContext()) {
         edges.slots.add(
-          DispatchSlot(null, '[]=', library, DispatchKind.method),
+          DispatchSlot(
+            null,
+            '[]=',
+            library,
+            DispatchKind.method,
+            receiver: origins.value(node.realTarget),
+          ),
         );
       }
       _dynamicLimitation();

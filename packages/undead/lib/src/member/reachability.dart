@@ -7,6 +7,8 @@ import 'package:path/path.dart' as p;
 import '../models.dart';
 import '../reachability_engine_helpers.dart';
 import '../root_harvester.dart';
+import 'assumptions.dart';
+import 'flow.dart';
 import 'graph.dart';
 
 Future<UndeadReport> analyzeMembers(
@@ -55,21 +57,27 @@ Future<UndeadReport> analyzeMembers(
     graph.addUnit(unit, file, reportable: included.contains(file));
   }
   graph.connect();
-  final production = MemberReachability(graph)..run(graph.productionRoots);
+  final production = MemberReachability(graph, trace: AssumptionTrace())
+    ..run(graph.productionRoots);
+  final explicit = MemberReachability(graph, allowAssumptions: false)
+    ..run(graph.productionRoots);
   final tests = MemberReachability(graph)..run(graph.testRoots);
-  final witnesses = <TestBlockSite, MemberReachability>{};
+  final witnesses = <TestBlockSite, Set<String>>{};
   for (final entry in graph.testSites.entries) {
     final reachability = MemberReachability(graph)..addEdges(entry.value);
     reachability.run(const {});
-    witnesses[entry.key] = reachability;
+    witnesses[entry.key] = reachability.live;
   }
-  return _report(graph, production, tests, witnesses);
+  return _report(graph, production, tests, witnesses, explicit.live);
 }
 
 /// Rapid type analysis: allocations and invoked interface slots grow to a fixed
 /// point. Each run owns its state; tests cannot allocate production receivers.
 class MemberReachability {
   final MemberGraph graph;
+  final bool allowAssumptions;
+  final AssumptionTrace? trace;
+  final ReceiverBindings bindings = ReceiverBindings();
   final Set<String> live = {};
   final Set<InterfaceElement> allocated = {};
   final Set<DispatchSlot> slots = {};
@@ -78,13 +86,19 @@ class MemberReachability {
   final Set<InterfaceElement> _checkedProtocols = {};
   final Set<InterfaceElement> _checkedEscapes = {};
   final Set<(InterfaceElement, DispatchSlot)> _dispatched = {};
-  MemberReachability(this.graph);
+  final Map<(String, List<CallArgument>), DispatchSlot> _getterSlots = {};
+  MemberReachability(this.graph, {this.allowAssumptions = true, this.trace});
 
   void _add(String key) {
     if (graph.nodes.containsKey(key) && live.add(key)) _queue.add(key);
   }
 
   void addEdges(MemberEdges edges) {
+    for (final entry in edges.bindings.entries) {
+      for (final value in entry.value) {
+        bindings.add(entry.key, value);
+      }
+    }
     edges.direct.forEach(_add);
     slots.addAll(edges.slots);
     for (final runtimeType in edges.runtimeTypes) {
@@ -94,6 +108,10 @@ class MemberReachability {
     }
     escaped.addAll(edges.escapedTypes);
     for (final constructor in edges.constructions) {
+      bindings.add(
+        'this#${elementKey(constructor)}',
+        ReceiverOrigin(types: {constructor.enclosingElement}),
+      );
       _add(elementKey(constructor));
       _add(elementKey(constructor.enclosingElement));
       if (!constructor.isFactory &&
@@ -111,28 +129,64 @@ class MemberReachability {
         addEdges(graph.nodes[_queue[head++]]!.edges);
       }
       for (final type in allocated.toList()) {
-        _retainExternalOverrides(type);
-        _retainEscapedSurface(type);
+        if (allowAssumptions) {
+          _retainExternalOverrides(type);
+          _retainEscapedSurface(type);
+        }
       }
-      final previousSlotCount = slots.length;
-      for (final slot in slots.toList()) {
-        _dispatchSlot(slot);
-      }
-      if (head == _queue.length && slots.length == previousSlotCount) break;
+      // Protocol/escape retention can enqueue bodies before dispatch begins.
+      if (head != _queue.length || _dispatchAll()) continue;
+      if (!allowAssumptions || !_dispatchAll(fallback: true)) break;
     }
   }
 
-  void _dispatchSlot(DispatchSlot slot) {
-    final receivers = slot.owner == null
-        ? allocated
-        : graph.implementations[elementKey(slot.owner!)] ??
-              const <InterfaceElement>{};
+  bool _dispatchAll({bool fallback = false}) {
+    final previousQueueLength = _queue.length;
+    final previousSlotCount = slots.length;
+    final previousBindings = bindings.revision;
+    for (final slot in slots.toList()) {
+      _dispatchSlot(slot, fallback: fallback);
+    }
+    return _queue.length != previousQueueLength ||
+        slots.length != previousSlotCount ||
+        bindings.revision != previousBindings;
+  }
+
+  void _dispatchSlot(DispatchSlot slot, {bool fallback = false}) {
+    if (slot.assumed && !allowAssumptions) return;
+    final origin = bindings.resolve(
+      slot.receiver ?? ReceiverOrigin.unknownValue,
+    );
+    final receivers = origin.unknown && fallback ? allocated : origin.types;
     for (final type in receivers) {
-      if (!allocated.contains(type) || !_dispatched.add((type, slot))) continue;
+      if (!allocated.contains(type) ||
+          !_compatible(type, slot.owner) ||
+          !_dispatched.add((type, slot))) {
+        continue;
+      }
       final target = _lookup(type, slot);
       if (target == null) continue;
-      _add(elementKey(target));
+      final key = elementKey(target);
+      trace?.dispatch(slot, key);
+      if (slot.assumed) {
+        trace?.retain(key, 'implicitJsonProtocol');
+      } else if (fallback && origin.unknown && !origin.types.contains(type)) {
+        trace?.retain(key, 'unresolvedReceiver');
+      }
+      _add(key);
+      _bindTarget(target, type, slot.arguments);
       _invokeGetterResult(target, slot);
+    }
+  }
+
+  void _bindTarget(
+    ExecutableElement target,
+    InterfaceElement type,
+    List<CallArgument> arguments,
+  ) {
+    bindings.add('this#${elementKey(target)}', ReceiverOrigin(types: {type}));
+    for (final entry in callBindings(target, arguments).entries) {
+      bindings.add(elementKey(entry.key), entry.value);
     }
   }
 
@@ -143,14 +197,26 @@ class MemberReachability {
     // object returned from it instead executes its call member. Unknown result
     // types conservatively admit all allocated callable receivers.
     if (result is FunctionType) return;
-    slots.add(
-      DispatchSlot(
+    // Canonical derived slots bound recursive callable getters to a finite set.
+    final indirect = _getterSlots.putIfAbsent(
+      (elementKey(target), slot.arguments),
+      () => DispatchSlot(
         result is InterfaceType ? result.element : null,
         'call',
         slot.library,
         DispatchKind.method,
+        receiver: ReceiverOrigin(
+          references: {
+            target.isOriginVariable
+                ? elementKey(target.variable)
+                : 'return#${elementKey(target)}',
+          },
+        ),
+        arguments: slot.arguments,
       ),
     );
+    slots.add(indirect);
+    trace?.indirect(elementKey(target), indirect);
   }
 
   void _retainEscapedSurface(InterfaceElement type) {
@@ -169,6 +235,7 @@ class MemberReachability {
       final owner = element.enclosingElement;
       if (owner is! InterfaceElement || !_compatible(type, owner)) continue;
       _add(node.key);
+      trace?.retain(node.key, 'externalEscape');
       graph.limitation(
         'externalEscape',
         node.declaration.relativeFilePath,
@@ -186,6 +253,7 @@ class MemberReachability {
     );
     for (final node in overrides) {
       _add(node.key);
+      trace?.retain(node.key, 'externalProtocol');
       graph.limitation(
         'externalProtocol',
         node.declaration.relativeFilePath,
@@ -258,7 +326,7 @@ class MemberReachability {
 
   ExecutableElement? _lookup(InterfaceElement type, DispatchSlot slot) =>
       graph.dispatchCache.putIfAbsent(
-        (type, slot),
+        (type, slot.selector),
         // A property read can tear off a method, and a method-style invocation
         // can invoke a callable getter/field. Preserve either Dart lookup form.
         () => switch (slot.kind) {
@@ -283,7 +351,8 @@ UndeadReport _report(
   MemberGraph graph,
   MemberReachability production,
   MemberReachability tests,
-  Map<TestBlockSite, MemberReachability> witnesses,
+  Map<TestBlockSite, Set<String>> witnesses,
+  Set<String> explicit,
 ) {
   final candidates = graph.nodes.values
       .where((node) => _candidate(graph, node, production.live))
@@ -330,20 +399,60 @@ UndeadReport _report(
     testedUndeadFound: count(UndeadClassification.testedUndead),
     coInvokedHazardsFound: count(UndeadClassification.coInvokedHazard),
     undead: findings,
+    uncertainCandidates: _uncertainFindings(graph, production, explicit),
     coverageLimitations: graph.limitations,
   );
+}
+
+List<UndeadFinding> _uncertainFindings(
+  MemberGraph graph,
+  MemberReachability production,
+  Set<String> explicit,
+) {
+  final reasons = production.trace!.reasons(graph, production.live);
+  final candidates = graph.nodes.values
+      .where(
+        (node) =>
+            production.live.contains(node.key) &&
+            _candidate(graph, node, explicit),
+      )
+      .toList();
+  final keys = candidates.map((node) => node.key).toSet();
+  final findings = <UndeadFinding>[];
+  for (final node in candidates) {
+    if (keys.contains(node.owner?.key)) continue;
+    final decl = node.declaration;
+    final retainedBy = (reasons[node.key] ?? const <String>{}).toList()..sort();
+    findings.add(
+      UndeadFinding(
+        id: '${decl.relativeFilePath}#${decl.kind.jsonValue}#${decl.name}',
+        name: decl.name,
+        kind: decl.kind,
+        file: decl.relativeFilePath,
+        line: decl.line,
+        column: decl.column,
+        length: decl.length,
+        classification: UndeadClassification.uncertain,
+        suggestedAction: SuggestedAction.review,
+        retentionReasons: retainedBy,
+        isExternalBinding: decl.isExternalBinding,
+        hasInheritedContract: _hasInheritedContract(node.element),
+      ),
+    );
+  }
+  return findings..sort(compareFindings);
 }
 
 List<OrphanTestSite> _orphanSites(
   MemberNode node,
   MemberGraph graph,
   MemberReachability production,
-  Map<TestBlockSite, MemberReachability> witnesses,
+  Map<TestBlockSite, Set<String>> witnesses,
 ) {
   final sites = <OrphanTestSite>[];
   for (final entry in witnesses.entries) {
-    if (!entry.value.live.contains(node.key)) continue;
-    final hazard = entry.value.live.any(
+    if (!entry.value.contains(node.key)) continue;
+    final hazard = entry.value.any(
       (key) => production.live.contains(key) && graph.nodes[key]!.isExecution,
     );
     final site = entry.key;

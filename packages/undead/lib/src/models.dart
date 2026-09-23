@@ -24,7 +24,10 @@ enum UndeadClassification {
   /// A declaration referenced only within its declaring library (and its parts)
   /// with zero cross-library references and zero test references. Candidate to
   /// be made library-private.
-  privateCandidate('privateCandidate', 'Private Candidate');
+  privateCandidate('privateCandidate', 'Private Candidate'),
+
+  /// Retained only by conservative member-analysis assumptions; may be live.
+  uncertain('uncertain', 'Uncertain');
 
   final String jsonValue;
   final String displayName;
@@ -36,6 +39,7 @@ enum UndeadClassification {
     'testedUndead' => testedUndead,
     'coInvokedHazard' => coInvokedHazard,
     'privateCandidate' => privateCandidate,
+    'uncertain' => uncertain,
     _ => throw ArgumentError.value(
       value,
       'value',
@@ -259,6 +263,9 @@ class UndeadFinding {
   /// An inherited declaration may constrain removing this method.
   final bool hasInheritedContract;
 
+  /// Conservative assumptions retaining this candidate or its dependency chain.
+  final List<String> retentionReasons;
+
   const UndeadFinding({
     required this.id,
     required this.name,
@@ -272,6 +279,7 @@ class UndeadFinding {
     this.orphanTests,
     this.isExternalBinding = false,
     this.hasInheritedContract = false,
+    this.retentionReasons = const [],
   });
 
   factory UndeadFinding.fromJson(Map<String, dynamic> json) => UndeadFinding(
@@ -290,6 +298,8 @@ class UndeadFinding {
         ?.map((t) => OrphanTestSite.fromJson(t as Map<String, dynamic>))
         .toList(),
     hasInheritedContract: json['hasInheritedContract'] as bool? ?? false,
+    retentionReasons: (json['retentionReasons'] as List<dynamic>? ?? const [])
+        .cast<String>(),
     isExternalBinding:
         json['isExternalBinding'] as bool? ??
         json['isExternalJsInterop'] as bool? ??
@@ -307,6 +317,7 @@ class UndeadFinding {
     'classification': classification.jsonValue,
     'suggestedAction': suggestedAction,
     if (hasInheritedContract) 'hasInheritedContract': true,
+    if (retentionReasons.isNotEmpty) 'retentionReasons': retentionReasons,
     if (isExternalBinding) 'isExternalBinding': true,
     if (orphanTests != null && orphanTests!.isNotEmpty)
       'orphanTests': orphanTests!.map((t) => t.toJson()).toList(),
@@ -324,6 +335,9 @@ class UndeadReport {
   final int coInvokedHazardsFound;
   final int privateCandidatesFound;
   final List<UndeadFinding> undead;
+
+  /// Member-only review candidates, excluded from ordinary undead counts.
+  final List<UndeadFinding> uncertainCandidates;
   final List<CoverageLimitation> coverageLimitations;
 
   const UndeadReport({
@@ -336,6 +350,7 @@ class UndeadReport {
     required this.coInvokedHazardsFound,
     this.privateCandidatesFound = 0,
     required this.undead,
+    this.uncertainCandidates = const [],
     this.coverageLimitations = const [],
   });
 
@@ -363,6 +378,10 @@ class UndeadReport {
       undead: findingsList
           .map((e) => UndeadFinding.fromJson(e as Map<String, dynamic>))
           .toList(),
+      uncertainCandidates:
+          (json['uncertainCandidates'] as List<dynamic>? ?? const [])
+              .map((e) => UndeadFinding.fromJson(e as Map<String, dynamic>))
+              .toList(),
       coverageLimitations:
           (json['coverageLimitations'] as List<dynamic>? ?? const [])
               .map(
@@ -382,8 +401,13 @@ class UndeadReport {
       'testedUndead': testedUndeadFound,
       'coInvokedHazards': coInvokedHazardsFound,
       'privateCandidates': privateCandidatesFound,
+      if (memberLevel) 'uncertainCandidates': uncertainCandidates.length,
     },
     'undead': undead.map((z) => z.toJson()).toList(),
+    if (memberLevel)
+      'uncertainCandidates': uncertainCandidates
+          .map((z) => z.toJson())
+          .toList(),
     if (coverageLimitations.isNotEmpty)
       'coverageLimitations': coverageLimitations
           .map((l) => l.toJson())

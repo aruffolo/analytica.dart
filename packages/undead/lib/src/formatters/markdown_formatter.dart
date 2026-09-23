@@ -80,6 +80,7 @@ class MarkdownFormatter {
       }
       buffer.writeln();
     }
+    _writeUncertain(buffer, report.uncertainCandidates);
     if (report.coverageLimitations.isNotEmpty) {
       buffer.writeln('### Coverage limitations\n');
       final grouped = <String, List<CoverageLimitation>>{};
@@ -94,6 +95,29 @@ class MarkdownFormatter {
       }
       buffer.writeln('\nThe JSON report contains the individual locations.');
     }
+  }
+
+  static void _writeUncertain(
+    StringBuffer buffer,
+    List<UndeadFinding> findings,
+  ) {
+    if (findings.isEmpty) return;
+    buffer.writeln('### Uncertain candidates\n');
+    buffer.writeln(
+      'These declarations and their exclusive dependencies are retained only '
+      'by conservative assumptions. They may execute at runtime. Review the '
+      'retention reasons; they are excluded from ordinary undead counts.\n',
+    );
+    buffer.writeln('| Symbol | Location | Retention reasons | Action |');
+    buffer.writeln('| :--- | :--- | :--- | :--- |');
+    for (final finding in findings) {
+      buffer.writeln(
+        '| `${finding.name}` | '
+        '`${finding.file}:${finding.line}:${finding.column}` | '
+        '${finding.retentionReasons.join(', ')} | Review |',
+      );
+    }
+    buffer.writeln();
   }
 
   static void _writeSummary(StringBuffer buffer, UndeadReport report) {

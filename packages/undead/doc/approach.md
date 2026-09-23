@@ -169,11 +169,21 @@ hierarchies and signatures without walking ordinary method bodies. Executable
 nodes carry direct effects, constructor allocations and interface selectors.
 Eager instance fields execute with construction; late/static fields execute when
 referenced. Redirects, implicit super constructors and applied-mixin super
-lookup preserve initialization and dispatch paths.
+lookup preserve initialization and dispatch paths. Named local functions have
+separate, nonreportable execution nodes keyed by declaring fragment and offset;
+walking an enclosing function does not execute a local declaration's body.
 
 A fixed-point traversal combines compatible receiver allocations and selectors.
 Production, tests and individual test witnesses each own their execution state.
-They share only immutable graph data and dispatch/protocol lookup caches.
+They share only immutable graph data and dispatch/protocol lookup caches. Each
+traversal also owns monotone receiver bindings. Allocation origins and lexical
+variable, actual-argument and return-value equations narrow individual selectors
+before unknown receivers fall back to compatible allocations. The binding
+revision participates in fixed-point convergence. Selector caches use only
+lookup shape, not call-site value flow. Missing actuals remain unknown;
+heap/global storage is not narrowed from its initializer alone. Compound updates
+invalidate a narrowed lexical receiver and use the analyzer read type for
+operator dispatch. Explicit super/redirecting calls forward argument origins.
 Candidate classification uses independent production/test results; test witness
 intersection considers callable execution rather than type or construction
 retention. Conservative external protocol retention is scoped to allocated
@@ -182,12 +192,13 @@ receivers, never a global root for all overrides.
 Selector lookup covers both method tear-offs from property reads and callable
 getters/fields from invocations. Invoking a getter can enqueue a `call` selector
 for its result type; the fixed point includes newly added selectors even when no
-new declaration was enqueued. SDK JSON references are recognized by resolved
-`dart:convert` identity and add the conventional `toJson` invocation selector to
-the referencing node. This handles nested encoding without activating protocol
-edges in unreachable bodies or leaking test allocations into production. The
-`implicitJsonProtocol` diagnostic exposes over-retention from the absence of
-encoder-configuration and container value flow.
+new declaration was enqueued. Derived getter-call selectors are canonicalized so
+recursive callable getters converge. SDK JSON references are recognized by
+resolved `dart:convert` identity and add the conventional `toJson` invocation
+selector to the referencing node. This handles nested encoding without
+activating protocol edges in unreachable bodies or leaking test allocations into
+production. The `implicitJsonProtocol` diagnostic exposes over-retention from
+the absence of encoder-configuration and container value flow.
 
 The graph scans excluded local source for transit, while the original topology
 continues to control entrypoints and reportable declarations. Diagnostics and
@@ -195,6 +206,15 @@ fallbacks are exposed in member reports. Finding locations and IDs refer to the
 actual declaring fragment, including part files. All findings in this mode
 recommend review; inherited declarations can impose structural obligations even
 when the overriding body is unreachable.
+
+Production is also traversed without assumption edges. The difference from full
+production reachability forms a separate `uncertainCandidates` list, applying
+the same source/name suppression and owner-child redundancy rules. Assumption
+seeds and actual dispatched edges propagate retention reasons through exclusive
+helper chains. The list covers protocol/escape/JSON retention and unknown
+receiver fallback. A path supported independently of these assumptions
+suppresses uncertainty. This is a review surface, not evidence of deadness;
+ordinary counts and CLI failure status use only unreachable findings.
 
 Regression coverage includes paired live/dead examples, separate test
 allocations, same-name collisions, generic and part identities, constructors,

@@ -1,5 +1,11 @@
 ## 0.1.2-wip
 
+- Separate uncalled named local bodies and narrow member dispatch using bounded
+  receiver origins from assignments, arguments and returns.
+- Expose assumption-only retained declarations and exclusive helper chains as
+  separate uncertain review candidates with retention reasons; keep ordinary
+  dead-code counts and default reports unchanged.
+
 - Preserve implicit SDK JSON conversion, dynamic method tear-offs and callable
   getter/field invocations in member analysis, including returned callable
   objects. Disclose conservative JSON protocol retention.

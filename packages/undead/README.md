@@ -76,6 +76,15 @@ method. Constructors, fields and accessors participate in reachability but do
 not receive member removal findings. Whole-owner findings suppress redundant
 child findings.
 
+Member reports also include `uncertainCandidates`: declarations kept alive only
+by conservative assumptions, together with their exclusive dependencies. Each
+has classification `uncertain`, action `review`, and `retentionReasons` such as
+`externalProtocol`, `externalEscape`, `implicitJsonProtocol` or
+`unresolvedReceiver`. These may be live at runtime. They appear separately in
+Markdown and JSON and do not contribute to ordinary undead counts or
+`--fail-on-undead`. An independently modeled live path removes a declaration
+from this list.
+
 Production and tests have independent receiver allocations and dispatch.
 Test-only findings include transitive test witnesses; a test that also executes
 a production callable is a co-invocation hazard. Merely constructing a live
@@ -87,7 +96,13 @@ This is a conservative static model, not complete runtime analysis:
 - Reachable callbacks/tear-offs and eager constructor initialization are
   retained. Receiver dispatch follows compatible allocated types, including
   inheritance, mixins and interfaces. Generic identity comes from the resolved
-  declaration.
+  declaration. Named local function bodies are traversed only when their
+  function is reached, including calls and escaped tear-offs.
+- Bounded receiver origins follow local assignments, actual arguments and simple
+  returned values. Only reached callers contribute, and tests cannot widen
+  production receivers. Origins are unioned across branches and calls; this is
+  not a flow-sensitive or context-sensitive analysis. Unknown values, omitted
+  argument defaults and heap/global storage use conservative fallback.
 - Overrides of external protocols on allocated receivers are retained. This
   covers Flutter lifecycle hooks such as `createState`, `initState`, `build`,
   and `dispose`, but can retain overrides that the runtime never invokes.

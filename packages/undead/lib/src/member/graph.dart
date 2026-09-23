@@ -8,6 +8,7 @@ import '../comment_parser.dart';
 import '../models.dart';
 import '../reachability_engine_helpers.dart';
 import '../root_harvester.dart';
+import 'flow.dart';
 import 'references.dart';
 
 /// Identity includes the declaring fragment, owner and element kind.
@@ -19,6 +20,11 @@ String elementKey(Element element) {
   }
   final source = base.firstFragment.libraryFragment?.source.fullName;
   final owner = base.enclosingElement;
+  if (base is LocalFunctionElement ||
+      base is LocalVariableElement ||
+      base is FormalParameterElement) {
+    return '$source#${base.kind}#${base.firstFragment.offset}';
+  }
   final ownerName = owner is InstanceElement ? owner.name : '';
   return '$source#$ownerName#${base.kind}#${base.lookupName}';
 }
@@ -53,6 +59,10 @@ class MemberEdges {
   final Set<DispatchSlot> slots = {};
   final Set<InterfaceElement> escapedTypes = {};
   final Set<InterfaceElement> runtimeTypes = {};
+  final Map<String, Set<ReceiverOrigin>> bindings = {};
+
+  void bind(String key, ReceiverOrigin value) =>
+      bindings.putIfAbsent(key, () => {}).add(value);
 }
 
 enum DispatchKind {
@@ -89,7 +99,20 @@ class DispatchSlot {
   final String name;
   final LibraryElement library;
   final DispatchKind kind;
-  const DispatchSlot(this.owner, this.name, this.library, this.kind);
+  final ReceiverOrigin? receiver;
+  final List<CallArgument> arguments;
+  final bool assumed;
+  const DispatchSlot(
+    this.owner,
+    this.name,
+    this.library,
+    this.kind, {
+    this.receiver,
+    this.arguments = const [],
+    this.assumed = false,
+  });
+
+  DispatchSlot get selector => DispatchSlot(owner, name, library, kind);
 
   @override
   bool operator ==(Object other) =>
@@ -97,9 +120,13 @@ class DispatchSlot {
       other.owner == owner &&
       other.name == name &&
       other.library == library &&
-      other.kind == kind;
+      other.kind == kind &&
+      other.receiver == receiver &&
+      other.arguments == arguments &&
+      other.assumed == assumed;
   @override
-  int get hashCode => Object.hash(owner, name, library, kind);
+  int get hashCode =>
+      Object.hash(owner, name, library, kind, receiver, arguments, assumed);
 }
 
 class MemberGraph {
@@ -122,6 +149,7 @@ class MemberGraph {
   void addUnit(ResolvedUnitResult unit, String file, {bool reportable = true}) {
     final collector = _Declarations(this, unit, file, reportable);
     unit.unit.accept(collector);
+    unit.unit.accept(_LocalDeclarations(this, unit, file));
     collectConditionalImports(
       directives: unit.unit.directives,
       relPath: file,
@@ -204,6 +232,7 @@ class MemberGraph {
   }
 
   void _addRoots(MemberNode node) {
+    if (node.element is LocalFunctionElement) return;
     final decl = node.declaration;
     if (!topology.allFiles.contains(decl.relativeFilePath)) return;
     final role = topology.roleOf(decl.relativeFilePath);
@@ -403,6 +432,40 @@ class _Declarations extends RecursiveAstVisitor<void> {
   @override
   void visitEnumConstantDeclaration(EnumConstantDeclaration node) {
     _add(node, finding: false);
+  }
+}
+
+/// Local bodies are executable nodes, never findings or implicit roots.
+class _LocalDeclarations extends RecursiveAstVisitor<void> {
+  final MemberGraph graph;
+  final ResolvedUnitResult unit;
+  final String file;
+  _LocalDeclarations(this.graph, this.unit, this.file);
+
+  @override
+  void visitFunctionDeclaration(FunctionDeclaration node) {
+    final element = node.declaredFragment?.element;
+    if (element is LocalFunctionElement) {
+      final location = unit.lineInfo.getLocation(node.offset);
+      final declaration = DeclarationNode(
+        id: elementKey(element),
+        name: element.name ?? 'local',
+        kind: DeclarationKind.function,
+        relativeFilePath: file,
+        offset: node.offset,
+        length: node.length,
+        line: location.lineNumber,
+        column: location.columnNumber,
+        element: element,
+      );
+      graph.nodes[declaration.id] = MemberNode(
+        declaration: declaration,
+        element: element,
+        ast: node,
+        reportable: false,
+      );
+    }
+    super.visitFunctionDeclaration(node);
   }
 }
 
