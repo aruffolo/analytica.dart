@@ -86,6 +86,7 @@ class MemberReachability {
   final Set<InterfaceElement> _checkedProtocols = {};
   final Set<InterfaceElement> _checkedEscapes = {};
   final Set<(InterfaceElement, DispatchSlot)> _dispatched = {};
+  final Map<InstanceElement?, List<InterfaceElement>> _fallbackReceivers = {};
   final Map<(String, List<CallArgument>), DispatchSlot> _getterSlots = {};
   MemberReachability(this.graph, {this.allowAssumptions = true, this.trace});
 
@@ -141,6 +142,8 @@ class MemberReachability {
   }
 
   bool _dispatchAll({bool fallback = false}) {
+    // Allocations stay fixed within this pass; a later pass may discover more.
+    if (fallback) _fallbackReceivers.clear();
     final previousQueueLength = _queue.length;
     final previousSlotCount = slots.length;
     final previousBindings = bindings.revision;
@@ -157,11 +160,9 @@ class MemberReachability {
     final origin = bindings.resolve(
       slot.receiver ?? ReceiverOrigin.unknownValue,
     );
-    final receivers = origin.unknown && fallback ? allocated : origin.types;
+    final receivers = _receivers(slot.owner, origin, fallback);
     for (final type in receivers) {
-      if (!allocated.contains(type) ||
-          !_compatible(type, slot.owner) ||
-          !_dispatched.add((type, slot))) {
+      if (!allocated.contains(type) || !_dispatched.add((type, slot))) {
         continue;
       }
       final target = _lookup(type, slot);
@@ -177,6 +178,30 @@ class MemberReachability {
       _bindTarget(target, type, slot.arguments);
       _invokeGetterResult(target, slot);
     }
+  }
+
+  Iterable<InterfaceElement> _receivers(
+    InstanceElement? owner,
+    ReceiverOrigin origin,
+    bool fallback,
+  ) {
+    final compatible = owner == null
+        ? null
+        : graph.implementations[elementKey(owner)] ??
+              const <InterfaceElement>{};
+    if (!fallback || !origin.unknown) {
+      return compatible == null
+          ? origin.types
+          : origin.types.where(compatible.contains);
+    }
+    // Preserve allocation order and share only the hierarchy filter. Target
+    // lookup, argument flow and dispatch history remain specific to each slot.
+    return _fallbackReceivers.putIfAbsent(
+      owner,
+      () => compatible == null
+          ? allocated.toList()
+          : allocated.where(compatible.contains).toList(),
+    );
   }
 
   void _bindTarget(

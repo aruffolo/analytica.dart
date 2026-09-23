@@ -193,4 +193,21 @@ void writeEffect() {}
 ''');
     expect(findingNames(report), isEmpty);
   });
+  test(
+    'a later call preserves a receiver allocated by an earlier call',
+    () async {
+      final report = await memberFixture('''
+abstract interface class Channel { void send(); }
+Channel current = First();
+Channel selected() => current;
+class First implements Channel { void send() { current = Second(); } }
+class Second implements Channel { void send() { delivered(); } }
+class Decoy { void send() { unrelated(); } void close() {} }
+void delivered() {}
+void unrelated() {}
+void main() { selected().send(); selected().send(); Decoy().close(); }
+''');
+      expect(findingNames(report), {'Decoy.send', 'unrelated'});
+    },
+  );
 }

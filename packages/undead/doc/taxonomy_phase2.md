@@ -91,3 +91,12 @@ member analysis, default-on rollout, precise points-to analysis and arbitrary
 reflection/runtime registries remain deferred. Modeling a declaration for
 correctness does not imply that it is safe to remove. No cleanup/fix command is
 provided by member analysis.
+
+Known recall gaps remain in receiver-origin merging. Reassigning a captured
+local or a formal parameter, updating a receiver in a loop, and taking an alias
+before rebinding can keep methods from an obsolete value alive. Those methods
+can be absent from both ordinary and uncertain candidates. A next precision step
+is to version values at assignment/use sites and preserve alias snapshots, with
+explicit joins for branches and conservative handling of captured writes. This
+requires paired live/dead controls; increased finding counts alone are not proof
+of correctness.

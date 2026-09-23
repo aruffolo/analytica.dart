@@ -1,5 +1,8 @@
 ## 0.1.2-wip
 
+- Reuse compatible receiver filtering within each dispatch pass to reduce
+  repeated work in large applications with many test witnesses.
+
 - Invalidate receiver origins on destructuring and existing-variable `for-in`
   writes, preserving methods reached after those mutations.
 
