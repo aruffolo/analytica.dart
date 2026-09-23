@@ -1,9 +1,10 @@
 # `pkg:undead`: Phase 2 & 3 Taxonomy (Internal Members & Enums)
 
-> [!NOTE] This document specifies the **Phase 2 & Phase 3** design covering
-> internal class members, constructors, fields, and enum constants. For the
-> active Phase 1 (MVP) top-level declaration taxonomy, see
-> [taxonomy.md](taxonomy.md).
+> [!NOTE] Sections 1–3 preserve the original **Phase 2 & Phase 3** proposal,
+> including proposed deletion actions. They are not current removal guidance.
+> The implemented closed-app option reports review candidates; see
+> [implementation status](#opt-in-member-analysis-status) below. The default
+> top-level analysis is described in [taxonomy.md](taxonomy.md).
 
 ---
 
@@ -75,3 +76,18 @@ Phase 3 addresses individual enum values and fine-grained field parameters.
 | **Suppressed via Custom Comment**        | Any        |   ❌ No   |         ❌ No         |      ❌ No      | **Ignored**              | Skip (`// undead:ignore_for_class`)       |
 
 <!-- mdformat on -->
+
+## Opt-in member analysis status
+
+The development `--member-level` closed-app path implements ordinary-method
+candidate discovery with separate structural/executable graphs, receiver
+allocation and dispatch, constructor effects, test witnesses and conservative
+external protocol handling. See
+[the architecture](approach.md#member-body-reachability) and
+[usage/limitations](../README.md#member-body-analysis-development).
+
+Field/accessor/constructor deletion findings, enum-value pruning, library-mode
+member analysis, default-on rollout, precise points-to analysis and arbitrary
+reflection/runtime registries remain deferred. Modeling a declaration for
+correctness does not imply that it is safe to remove. No cleanup/fix command is
+provided by member analysis.

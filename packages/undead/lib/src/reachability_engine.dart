@@ -5,6 +5,7 @@ import 'package:analyzer/dart/element/element.dart';
 import 'package:path/path.dart' as p;
 
 import 'comment_parser.dart';
+import 'member/reachability.dart';
 import 'models.dart';
 import 'reachability_engine_helpers.dart';
 import 'root_harvester.dart';
@@ -25,6 +26,12 @@ class UndeadEngine {
 
   /// Performs reachability analysis on the target package.
   Future<UndeadReport> analyze() async {
+    if (options.memberLevel &&
+        (options.mode != AnalysisMode.closedApp || options.suggestPrivate)) {
+      throw ArgumentError(
+        'memberLevel requires closed-app mode without suggestPrivate',
+      );
+    }
     final harvester = RootHarvester(options);
     final topology = harvester.harvestTopology();
     final absolutePackagePath = p.normalize(p.absolute(options.packagePath));
@@ -33,6 +40,9 @@ class UndeadEngine {
       absolutePackagePath: absolutePackagePath,
       topology: topology,
     );
+    if (options.memberLevel) {
+      return analyzeMembers(options, topology, contextHelper);
+    }
 
     // Step 1: Single-pass parse and resolution for all files in topology.
     final data = await _harvestDeclarationsAndTestSites(
@@ -706,6 +716,7 @@ Future<UndeadReport> analyzePackage(
                 format: options.format,
                 exampleMode: options.exampleMode,
                 mode: options.mode,
+                memberLevel: options.memberLevel,
                 includeGenerated: options.includeGenerated,
                 failOnUndead: options.failOnUndead,
                 autoPubGet: options.autoPubGet,

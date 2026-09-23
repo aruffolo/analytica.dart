@@ -155,3 +155,41 @@ CLI integration tests launch `bin/undead.dart` via
 - `--format=markdown` table rendering.
 - `--example-mode=demonstration` vs `strict`.
 - `--fail-on-undead` exit code handling (0 vs 1).
+
+## Member body reachability
+
+`UndeadOptions.memberLevel` selects a separate closed-app graph in `src/member`.
+The shared `analytica` reference extractor and the default top-level graph keep
+their original semantics for existing consumers.
+
+Each declaration is identified by its resolved base element, declaring source
+fragment, owner and element kind. Synthetic field accessors normalize to the
+field; explicit accessors remain separate. Structural walks retain class
+hierarchies and signatures without walking ordinary method bodies. Executable
+nodes carry direct effects, constructor allocations and interface selectors.
+Eager instance fields execute with construction; late/static fields execute when
+referenced. Redirects, implicit super constructors and applied-mixin super
+lookup preserve initialization and dispatch paths.
+
+A fixed-point traversal combines compatible receiver allocations and selectors.
+Production, tests and individual test witnesses each own their execution state.
+They share only immutable graph data and dispatch/protocol lookup caches.
+Candidate classification uses independent production/test results; test witness
+intersection considers callable execution rather than type or construction
+retention. Conservative external protocol retention is scoped to allocated
+receivers, never a global root for all overrides.
+
+The graph scans excluded local source for transit, while the original topology
+continues to control entrypoints and reportable declarations. Diagnostics and
+fallbacks are exposed in member reports. Finding locations and IDs refer to the
+actual declaring fragment, including part files. All findings in this mode
+recommend review; inherited declarations can impose structural obligations even
+when the overriding body is unreachable.
+
+Regression coverage includes paired live/dead examples, separate test
+allocations, same-name collisions, generic and part identities, constructors,
+mixins, callbacks, generated parts and resolution diagnostics. Generalization
+checks rename/reorder/move equivalent programs and separately add/remove
+production or test calls. The portable Flutter runner resolves real
+dependencies, runs analysis and widget tests, then asserts both default and
+opted-in CLI output.

@@ -1,0 +1,38 @@
+import 'package:flutter/widgets.dart';
+class Screen extends StatefulWidget {
+  const Screen({super.key});
+  @override
+  State<Screen> createState() => ScreenState();
+}
+mixin LifecycleEffects on State<Screen> {
+  @override
+  void didChangeDependencies() {
+    super.didChangeDependencies();
+    mixinDependency();
+  }
+}
+class ScreenState extends State<Screen> with LifecycleEffects {
+  @override
+  void initState() { super.initState(); initDependency(); }
+  @override
+  Widget build(BuildContext context) => GestureDetector(
+    onTap: onPressed,
+    child: Text(buildDependency(), textDirection: TextDirection.ltr),
+  );
+  void onPressed() { callbackDependency(); }
+  @override
+  void dispose() { disposeDependency(); super.dispose(); }
+  void unusedMember() { hiddenDependency(); }
+}
+void mixinDependency() {}
+void callbackDependency() {}
+void initDependency() {}
+String buildDependency() => 'alive';
+void disposeDependency() {}
+void hiddenDependency() {}
+class DeadScreen extends StatelessWidget {
+  const DeadScreen({super.key});
+  @override
+  Widget build(BuildContext context) => Text(deadBuildDependency(), textDirection: TextDirection.ltr);
+}
+String deadBuildDependency() => 'dead';

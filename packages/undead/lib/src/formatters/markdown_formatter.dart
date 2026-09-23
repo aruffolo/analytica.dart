@@ -10,6 +10,10 @@ class MarkdownFormatter {
     buffer.writeln('# Undead Code Analysis: `${report.package}`\n');
 
     _writeSummary(buffer, report);
+    if (report.memberLevel) {
+      _writeMemberReport(buffer, report);
+      return buffer.toString();
+    }
 
     if (report.undead.isEmpty) {
       buffer.writeln('🎉 **No undead declarations detected across package.**');
@@ -46,6 +50,50 @@ class MarkdownFormatter {
     );
 
     return buffer.toString();
+  }
+
+  static void _writeMemberReport(StringBuffer buffer, UndeadReport report) {
+    buffer.writeln('## Member-level review candidates\n');
+    buffer.writeln(
+      'Findings describe unreachable bodies under the modeled roots. '
+      'Review contracts, runtime entrypoints and test witnesses '
+      'before removal.\n',
+    );
+    if (report.undead.isEmpty) {
+      buffer.writeln('No candidates found within the modeled reachability.\n');
+    } else {
+      buffer.writeln(
+        '| Symbol | Kind | Classification | Location | '
+        'Test witnesses | Action |',
+      );
+      buffer.writeln('| :--- | :--- | :--- | :--- | ---: | :--- |');
+      for (final finding in report.undead) {
+        final action = finding.hasInheritedContract
+            ? 'Review body and inherited contract'
+            : 'Review';
+        buffer.writeln(
+          '| `${finding.name}` | ${finding.kind.jsonValue} | '
+          '${finding.classification.displayName} | '
+          '`${finding.file}:${finding.line}:${finding.column}` | '
+          '${finding.orphanTests?.length ?? 0} | $action |',
+        );
+      }
+      buffer.writeln();
+    }
+    if (report.coverageLimitations.isNotEmpty) {
+      buffer.writeln('### Coverage limitations\n');
+      final grouped = <String, List<CoverageLimitation>>{};
+      for (final limitation in report.coverageLimitations) {
+        grouped.putIfAbsent(limitation.code, () => []).add(limitation);
+      }
+      for (final entry in grouped.entries) {
+        buffer.writeln(
+          '- `${entry.key}` (${entry.value.length} locations): '
+          '${entry.value.first.message}',
+        );
+      }
+      buffer.writeln('\nThe JSON report contains the individual locations.');
+    }
   }
 
   static void _writeSummary(StringBuffer buffer, UndeadReport report) {

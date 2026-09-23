@@ -40,6 +40,13 @@ ArgParser buildArgParser() {
       allowed: ['library', 'closed-app'],
       defaultsTo: 'library',
     )
+    ..addFlag(
+      'member-level',
+      defaultsTo: false,
+      help:
+          'Review ordinary method bodies separately '
+          '(requires --mode=closed-app).',
+    )
     ..addPathFilterOptions()
     ..addFlag(
       'include-generated',
@@ -111,6 +118,24 @@ ArgParser buildArgParser() {
     ..addVersionFlag(help: 'Print undead version.');
 }
 
+bool _incompatibleMemberOptions(
+  bool memberLevel,
+  AnalysisMode mode,
+  bool suggestPrivate,
+) => memberLevel && (mode != AnalysisMode.closedApp || suggestPrivate);
+
+PathFilter _pathFilter(ArgResults results) {
+  final filter = parsePathFilter(results);
+  if (results.wasParsed('include-generated') &&
+      results.flag('include-generated')) {
+    return PathFilter(
+      excludePatterns: filter.excludePatterns,
+      ignoreGenerated: false,
+    );
+  }
+  return filter;
+}
+
 /// Main CLI runner for `pkg:undead`.
 class UndeadCliRunner {
   final ArgParser parser;
@@ -171,14 +196,19 @@ class UndeadCliRunner {
     final format = OutputFormat.fromString(results.option('format')!);
     final exampleMode = ExampleMode.fromString(results.option('example-mode')!);
     final mode = AnalysisMode.fromString(results.option('mode')!);
-    var pathFilter = parsePathFilter(results);
-    if (results.wasParsed('include-generated') &&
-        results.flag('include-generated')) {
-      pathFilter = PathFilter(
-        excludePatterns: pathFilter.excludePatterns,
-        ignoreGenerated: false,
+    final memberLevel = results.flag('member-level');
+    if (_incompatibleMemberOptions(
+      memberLevel,
+      mode,
+      results.flag('suggest-private'),
+    )) {
+      errSink.writeln(
+        'Error: --member-level requires --mode=closed-app '
+        'and cannot be combined with --suggest-private.',
       );
+      return ExitCode.usage.code;
     }
+    final pathFilter = _pathFilter(results);
     final failOnUndead = results.flag('fail-on-undead');
     final autoPubGet = results.flag('pub-get');
     final ignoreExternalBindings = results.flag('ignore-external-bindings');
@@ -199,6 +229,7 @@ class UndeadCliRunner {
       format: format,
       exampleMode: exampleMode,
       mode: mode,
+      memberLevel: memberLevel,
       pathFilter: pathFilter,
       failOnUndead: failOnUndead,
       autoPubGet: autoPubGet,

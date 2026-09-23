@@ -52,6 +52,68 @@ dart run undead@ --format=json
 dart run undead@ --format=markdown
 ```
 
+### Member body analysis (development)
+
+The opt-in `--member-level` mode separates ordinary method bodies from their
+owner classes. For example, calling `Live.run` no longer keeps dependencies
+referenced only by `Live.unusedMethod` alive. Run the development source from
+this repository:
+
+```bash
+dart run packages/undead/bin/undead.dart --mode=closed-app --member-level --example-mode=skip --format=json /path/to/app
+```
+
+The API equivalent is
+`UndeadOptions(memberLevel: true, mode: AnalysisMode.closedApp, packagePath: ...)`.
+The option requires closed-app mode and cannot be combined with
+`suggestPrivate`. Defaults and library analysis retain their existing behavior.
+
+Member reports use qualified names and file-qualified IDs, `kind: "method"`,
+`memberLevel: true`, and `suggestedAction: "review"`. A
+`hasInheritedContract: true` finding may need its declaration/signature to
+satisfy a live interface; an unreachable body is not permission to delete the
+method. Constructors, fields and accessors participate in reachability but do
+not receive member removal findings. Whole-owner findings suppress redundant
+child findings.
+
+Production and tests have independent receiver allocations and dispatch.
+Test-only findings include transitive test witnesses; a test that also executes
+a production callable is a co-invocation hazard. Merely constructing a live
+owner does not create that hazard. Tests are never recommended for automatic
+removal in member mode.
+
+This is a conservative static model, not complete runtime analysis:
+
+- Reachable callbacks/tear-offs and eager constructor initialization are
+  retained. Receiver dispatch follows compatible allocated types, including
+  inheritance, mixins and interfaces. Generic identity comes from the resolved
+  declaration.
+- Overrides of external protocols on allocated receivers are retained. This
+  covers Flutter lifecycle hooks such as `createState`, `initState`, `build`,
+  and `dispose`, but can retain overrides that the runtime never invokes.
+- Unknown selectors retain matching members on allocated receivers. Objects
+  exposed to arbitrary foreign code retain their public surface; SDK/Flutter
+  protocol hooks and supplied callbacks are modeled separately.
+- Resolvable excluded/generated local files are read for dependency transit but
+  do not produce findings. They do not become new entrypoints merely through
+  transit. Files that the analyzer cannot resolve are reported as coverage
+  limitations.
+- `coverageLimitations` records resolution errors and conservative boundaries.
+  Markdown groups these diagnostics; JSON includes each source location.
+  Configure actual runtime roots with adapters, pragmas and `--extra-roots`.
+  Reflection, arbitrary runtime registries and full points-to analysis are not
+  supported. Missing or unresolved input requires additional review.
+
+The portable real-Flutter check requires an installed Flutter SDK and fails if
+it is unavailable:
+
+```bash
+dart run packages/undead/tool/verify_member_flutter.dart
+```
+
+See [the architecture](doc/approach.md#member-body-reachability) for the graph
+invariants and [the Phase 2 taxonomy](doc/taxonomy_phase2.md) for deferred work.
+
 ### CLI Options
 
 <!-- CLI_README_START -->
@@ -69,6 +131,7 @@ Usage: undead [options] [target_path]
                                            [demonstration (default), strict, skip]
 -m, --mode                                 Package analysis mode.
                                            [library (default), closed-app]
+    --[no-]member-level                    Review ordinary method bodies separately (requires --mode=closed-app).
     --exclude=<glob>                       Glob patterns of files/directories to exclude (repeatable or comma-separated).
     --[no-]ignore-generated                Exclude generated files (*.g.dart, *.freezed.dart, *.mocks.dart, etc.).
                                            (defaults to on)

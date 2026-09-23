@@ -1,0 +1,12 @@
+import 'package:flutter/widgets.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:member_review_flutter/src/screen.dart';
+void main() {
+  testWidgets('build and dispose live screen', (tester) async {
+    await tester.pumpWidget(const Screen());
+    expect(find.text('alive'), findsOneWidget);
+    await tester.tap(find.text('alive'));
+    await tester.pump();
+    await tester.pumpWidget(const SizedBox());
+  });
+}

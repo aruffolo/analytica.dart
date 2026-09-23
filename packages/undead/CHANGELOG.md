@@ -1,5 +1,13 @@
 ## 0.1.2-wip
 
+- Add opt-in `--member-level` closed-app analysis and
+  `UndeadOptions.memberLevel` to find unused ordinary methods and dependencies
+  hidden by live classes.
+- Model constructor initialization, receiver dispatch, callbacks and external
+  protocol overrides with separate production and test reachability.
+- Add qualified review findings, inherited-contract indicators, transitive test
+  witnesses and coverage limitations. Default analysis is unchanged.
+
 - Adopt centralized `PathFilter` in `UndeadOptions` and CLI for `--exclude` and
   `--[no-]ignore-generated` file filtering.
 - Add `ensure_cli_readme_test.dart` to verify CLI `--help` documentation in
