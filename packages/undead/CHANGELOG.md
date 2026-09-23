@@ -1,5 +1,8 @@
 ## 0.1.2-wip
 
+- Preserve implicit SDK JSON conversion, dynamic method tear-offs and callable
+  getter/field invocations in member analysis, including returned callable
+  objects. Disclose conservative JSON protocol retention.
 - Add opt-in `--member-level` closed-app analysis and
   `UndeadOptions.memberLevel` to find unused ordinary methods and dependencies
   hidden by live classes.

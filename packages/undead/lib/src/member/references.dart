@@ -24,6 +24,7 @@ class MemberReferences extends RecursiveAstVisitor<void> {
   void reference(Element? raw, {bool direct = false}) {
     if (raw == null) return;
     final element = raw.baseElement;
+    _sdkJsonProtocol(element);
     if (element is MultiplyDefinedElement) {
       for (final conflicting in element.conflictingElements) {
         reference(conflicting, direct: direct);
@@ -42,6 +43,38 @@ class MemberReferences extends RecursiveAstVisitor<void> {
       return;
     }
     edges.direct.add(elementKey(element));
+  }
+
+  void _sdkJsonProtocol(Element element) {
+    if (element.library?.uri.toString() != 'dart:convert') return;
+    final owner = element.enclosingElement;
+    final exposesEncoder = switch (element) {
+      TopLevelFunctionElement(name: 'jsonEncode') => true,
+      GetterElement(name: 'json') => true,
+      ExecutableElement() when owner is InterfaceElement => const {
+        'JsonCodec',
+        'JsonEncoder',
+        'JsonUtf8Encoder',
+      }.contains(owner.name),
+      _ => false,
+    };
+    if (!exposesEncoder) return;
+    // SDK JSON's default converter invokes object.toJson() dynamically, even
+    // for objects nested in containers or returned by another toJson(). The
+    // graph has no value flow for encoder configuration/container contents, so
+    // conservatively retain this selector on allocated receivers. Keeping the
+    // edge on the referencing node preserves production/test separation.
+    edges.slots.add(DispatchSlot(null, 'toJson', library, DispatchKind.method));
+    final source =
+        graph.nodes[sourceElement == null ? '' : elementKey(sourceElement!)];
+    graph.limitation(
+      'implicitJsonProtocol',
+      source?.declaration.relativeFilePath ?? library.uri.toString(),
+      source?.declaration.line ?? 1,
+      'SDK JSON codec/encoder use conservatively retains toJson on allocated '
+          'receivers, including nested values; custom converters and unused '
+          'encoder configurations may retain extra methods.',
+    );
   }
 
   void _constructor(ConstructorElement element, bool direct) {

@@ -1,5 +1,6 @@
 import 'package:analytica/analyzer.dart';
 import 'package:analyzer/dart/element/element.dart';
+import 'package:analyzer/dart/element/type.dart';
 import 'package:analyzer/error/error.dart';
 import 'package:path/path.dart' as p;
 
@@ -113,10 +114,11 @@ class MemberReachability {
         _retainExternalOverrides(type);
         _retainEscapedSurface(type);
       }
+      final previousSlotCount = slots.length;
       for (final slot in slots.toList()) {
         _dispatchSlot(slot);
       }
-      if (head == _queue.length) break;
+      if (head == _queue.length && slots.length == previousSlotCount) break;
     }
   }
 
@@ -128,8 +130,27 @@ class MemberReachability {
     for (final type in receivers) {
       if (!allocated.contains(type) || !_dispatched.add((type, slot))) continue;
       final target = _lookup(type, slot);
-      if (target != null) _add(elementKey(target));
+      if (target == null) continue;
+      _add(elementKey(target));
+      _invokeGetterResult(target, slot);
     }
+  }
+
+  void _invokeGetterResult(ExecutableElement target, DispatchSlot slot) {
+    if (slot.kind != DispatchKind.method || target is! GetterElement) return;
+    final result = target.returnType;
+    // Function bodies/tear-offs are already traversed through the getter. An
+    // object returned from it instead executes its call member. Unknown result
+    // types conservatively admit all allocated callable receivers.
+    if (result is FunctionType) return;
+    slots.add(
+      DispatchSlot(
+        result is InterfaceType ? result.element : null,
+        'call',
+        slot.library,
+        DispatchKind.method,
+      ),
+    );
   }
 
   void _retainEscapedSurface(InterfaceElement type) {
@@ -238,22 +259,22 @@ class MemberReachability {
   ExecutableElement? _lookup(InterfaceElement type, DispatchSlot slot) =>
       graph.dispatchCache.putIfAbsent(
         (type, slot),
+        // A property read can tear off a method, and a method-style invocation
+        // can invoke a callable getter/field. Preserve either Dart lookup form.
         () => switch (slot.kind) {
           DispatchKind.superMethod ||
           DispatchKind.superGetter ||
           DispatchKind.superSetter => _mixinSuper(type, slot),
-          DispatchKind.getter => type.lookUpGetter(
-            name: slot.name,
-            library: slot.library,
-          ),
+          DispatchKind.getter =>
+            type.lookUpGetter(name: slot.name, library: slot.library) ??
+                type.lookUpMethod(name: slot.name, library: slot.library),
           DispatchKind.setter => type.lookUpSetter(
             name: slot.name,
             library: slot.library,
           ),
-          DispatchKind.method => type.lookUpMethod(
-            name: slot.name,
-            library: slot.library,
-          ),
+          DispatchKind.method =>
+            type.lookUpMethod(name: slot.name, library: slot.library) ??
+                type.lookUpGetter(name: slot.name, library: slot.library),
         },
       );
 }

@@ -94,6 +94,14 @@ This is a conservative static model, not complete runtime analysis:
 - Unknown selectors retain matching members on allocated receivers. Objects
   exposed to arbitrary foreign code retain their public surface; SDK/Flutter
   protocol hooks and supplied callbacks are modeled separately.
+- Property reads can retain method tear-offs; invocations can retain callable
+  getters/fields and the `call` method of objects they return.
+- Reachable SDK JSON codec/encoder references retain `toJson` on allocated
+  receivers, including objects nested in containers or produced by another
+  conversion. `implicitJsonProtocol` discloses this conservative approximation:
+  explicit converters, decode-only codec use and unrelated allocated receivers
+  can retain unused `toJson` methods. Encoder configuration and container value
+  flow are not tracked precisely.
 - Resolvable excluded/generated local files are read for dependency transit but
   do not produce findings. They do not become new entrypoints merely through
   transit. Files that the analyzer cannot resolve are reported as coverage

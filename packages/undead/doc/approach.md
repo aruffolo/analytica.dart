@@ -179,6 +179,16 @@ intersection considers callable execution rather than type or construction
 retention. Conservative external protocol retention is scoped to allocated
 receivers, never a global root for all overrides.
 
+Selector lookup covers both method tear-offs from property reads and callable
+getters/fields from invocations. Invoking a getter can enqueue a `call` selector
+for its result type; the fixed point includes newly added selectors even when no
+new declaration was enqueued. SDK JSON references are recognized by resolved
+`dart:convert` identity and add the conventional `toJson` invocation selector to
+the referencing node. This handles nested encoding without activating protocol
+edges in unreachable bodies or leaking test allocations into production. The
+`implicitJsonProtocol` diagnostic exposes over-retention from the absence of
+encoder-configuration and container value flow.
+
 The graph scans excluded local source for transit, while the original topology
 continues to control entrypoints and reportable declarations. Diagnostics and
 fallbacks are exposed in member reports. Finding locations and IDs refer to the
