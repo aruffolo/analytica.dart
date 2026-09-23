@@ -101,6 +101,9 @@ class ReceiverOrigins {
   void update(Expression operand) =>
       _write(operand, ReceiverOrigin.unknownValue);
 
+  void invalidate(Element? target) =>
+      _bindWrite(target, ReceiverOrigin.unknownValue);
+
   void _write(Expression target, ReceiverOrigin origin) {
     final element = switch (target) {
       SimpleIdentifier(:final element) => element,
@@ -108,6 +111,10 @@ class ReceiverOrigins {
       PropertyAccess(:final propertyName) => propertyName.element,
       _ => null,
     };
+    _bindWrite(element, origin);
+  }
+
+  void _bindWrite(Element? element, ReceiverOrigin origin) {
     if (element is LocalVariableElement || element is FormalParameterElement) {
       edges.bind(elementKey(element!), origin);
     }

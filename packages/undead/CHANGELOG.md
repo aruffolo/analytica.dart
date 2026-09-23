@@ -1,5 +1,8 @@
 ## 0.1.2-wip
 
+- Invalidate receiver origins on destructuring and existing-variable `for-in`
+  writes, preserving methods reached after those mutations.
+
 - Separate uncalled named local bodies and narrow member dispatch using bounded
   receiver origins from assignments, arguments and returns.
 - Expose assumption-only retained declarations and exclusive helper chains as

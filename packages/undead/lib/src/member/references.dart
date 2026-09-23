@@ -500,6 +500,21 @@ class MemberReferences extends RecursiveAstVisitor<void> {
   }
 
   @override
+  void visitAssignedVariablePattern(AssignedVariablePattern node) {
+    // Destructuring writes each resolved variable, including nested patterns.
+    if (!shapeOnly) origins.invalidate(node.element);
+    super.visitAssignedVariablePattern(node);
+  }
+
+  @override
+  void visitForEachPartsWithIdentifier(ForEachPartsWithIdentifier node) {
+    // Iteration can overwrite an existing local or parameter without an
+    // AssignmentExpression. Container element origins are not modeled.
+    if (!shapeOnly) origins.update(node.identifier);
+    super.visitForEachPartsWithIdentifier(node);
+  }
+
+  @override
   void visitAssignmentExpression(AssignmentExpression node) {
     if (!shapeOnly) origins.assignment(node);
     _operator(
