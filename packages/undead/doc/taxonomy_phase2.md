@@ -92,11 +92,20 @@ reflection/runtime registries remain deferred. Modeling a declaration for
 correctness does not imply that it is safe to remove. No cleanup/fix command is
 provided by member analysis.
 
-Known recall gaps remain in receiver-origin merging. Reassigning a captured
-local or a formal parameter, updating a receiver in a loop, and taking an alias
-before rebinding can keep methods from an obsolete value alive. Those methods
-can be absent from both ordinary and uncertain candidates. A next precision step
-is to version values at assignment/use sites and preserve alias snapshots, with
-explicit joins for branches and conservative handling of captured writes. This
-requires paired live/dead controls; increased finding counts alone are not proof
-of correctness.
+Receiver values now distinguish supported assignment/use sites, alias snapshots,
+loop joins and bounded callback invocation and suspension. Unsupported control
+flow, callback escapes, mutable heap storage and unknown asynchronous completion
+still retain conservative origin unions and can hide dead method bodies and
+their helpers from both ordinary and uncertain candidates. Full
+context-sensitive points-to or scheduling analysis remains deferred. Preserve
+paired live/dead controls when extending precision; increased finding counts
+alone are not proof of correctness. See
+[the architecture](approach.md#member-body-reachability) for the current
+transfer boundary and executable regression contract.
+
+Known precision gaps include nullness propagated through method returns or
+function arguments (including nullable `FutureOr`), callbacks stored in fields
+or records, and initially pending futures. These can hide dead methods and their
+helpers even when paired runtime examples demonstrate the difference. They
+require separate nullness, escape or scheduling analysis; the local
+receiver-flow regression contract does not establish completeness for them.

@@ -3,6 +3,7 @@ import 'package:analyzer/dart/element/element.dart';
 
 import 'flow.dart';
 import 'graph.dart';
+import 'receiver_values.dart';
 
 /// Collects value-flow equations, without mixing production and test state.
 class ReceiverOrigins {
@@ -15,18 +16,29 @@ class ReceiverOrigins {
       ? ReceiverOrigin.unknownValue
       : ReceiverOrigin(references: {'this#${elementKey(source!)}'});
 
-  ReceiverOrigin value(Expression? expression) => switch (expression) {
+  Map<Expression, ReceiverOrigin> collectValues() =>
+      ReceiverValues(_legacyValue, (element) {
+        if (element is! TopLevelFunctionElement) return null;
+        final ast = graph.nodes[elementKey(element)]?.ast;
+        return ast is FunctionDeclaration ? ast.functionExpression : null;
+      }).analyze(source == null ? null : graph.nodes[elementKey(source!)]?.ast);
+
+  ReceiverOrigin value(Expression? expression) => expression == null
+      ? ReceiverOrigin.unknownValue
+      : graph.receiverValues[expression] ?? _legacyValue(expression);
+
+  ReceiverOrigin _legacyValue(Expression expression) => switch (expression) {
     InstanceCreationExpression(:final constructorName)
         when constructorName.element?.isFactory == false =>
       ReceiverOrigin(types: {constructorName.element!.enclosingElement}),
     SimpleIdentifier(:final element) => _elementValue(element),
     PrefixedIdentifier(:final element) => _elementValue(element),
     PropertyAccess(:final propertyName) => _elementValue(propertyName.element),
-    ParenthesizedExpression(:final expression) => value(expression),
-    AsExpression(:final expression) => value(expression),
+    ParenthesizedExpression(:final expression) => _legacyValue(expression),
+    AsExpression(:final expression) => _legacyValue(expression),
     ThisExpression() || SuperExpression() => implicitReceiver,
     ConditionalExpression(:final thenExpression, :final elseExpression) =>
-      _union(value(thenExpression), value(elseExpression)),
+      _union(_legacyValue(thenExpression), _legacyValue(elseExpression)),
     MethodInvocation(:final methodName) => _returnValue(methodName.element),
     FunctionExpressionInvocation(:final element) => _returnValue(element),
     _ => ReceiverOrigin.unknownValue,

@@ -9,6 +9,7 @@ import '../models.dart';
 import '../reachability_engine_helpers.dart';
 import '../root_harvester.dart';
 import 'flow.dart';
+import 'origins.dart';
 import 'references.dart';
 
 /// Identity includes the declaring fragment, owner and element kind.
@@ -137,6 +138,7 @@ class MemberGraph {
   final Map<(InterfaceElement, DispatchSlot), ExecutableElement?>
   dispatchCache = {};
   final Map<InterfaceElement, List<MemberNode>> protocolCache = {};
+  final Map<Expression, ReceiverOrigin> receiverValues = {};
   final Set<String> productionRoots = {};
   final Set<String> testRoots = {};
   final Map<TestBlockSite, MemberEdges> testSites = {};
@@ -161,7 +163,20 @@ class MemberGraph {
     }
   }
 
+  void _collectReceiverValues() {
+    // Collect lexical flow before connecting independently owned local nodes.
+    for (final node in nodes.values) {
+      if (node.element is! LocalFunctionElement &&
+          (node.ast is FunctionDeclaration || node.ast is MethodDeclaration)) {
+        receiverValues.addAll(
+          ReceiverOrigins(this, node.edges, node.element).collectValues(),
+        );
+      }
+    }
+  }
+
   void connect() {
+    _collectReceiverValues();
     for (final node in nodes.values) {
       final element = node.element;
       if (element is! InterfaceElement) continue;
@@ -206,6 +221,8 @@ class MemberGraph {
       _addRoots(node);
     }
     _connectConditionals();
+    // Expression refinements are consumed only while connecting body edges.
+    receiverValues.clear();
   }
 
   void _connectConstructor(MemberNode node) {

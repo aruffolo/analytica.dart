@@ -189,6 +189,37 @@ intersection considers callable execution rather than type or construction
 retention. Conservative external protocol retention is scoped to allocated
 receivers, never a global root for all overrides.
 
+Before connecting executable graph nodes, a bounded lexical transfer computes
+receiver values at individual expressions. Assignments replace the current local
+value; aliases preserve the copied value. Feasible alternatives join at branches
+and loop exits. Null shortening includes chained selectors, arguments and setter
+right-hand sides. Named and anonymous callbacks share captured cells at
+invocation but keep callee locals separate. Resolved synchronous helpers can
+forward callbacks; helper facts are not published as if they covered every
+caller. A returned reader can retain capture precision only when its analyzed
+execution does not mutate captured cells and no pending local task can change
+them.
+
+Local asynchronous calls have a bounded model for a single suspension on a
+resolved SDK `Future.value` with no argument or a primitive literal. The
+synchronous prefix executes at the call; the queued tail reads shared captures
+after the caller suspends, with a separate snapshot of callee locals for each
+activation. Arbitrary future completion, callback schedulers, repeated
+suspension, recursion, unsupported control flow and work-budget exhaustion
+discard the lexical refinement and retain the conservative origin equations.
+This is not general async or heap points-to analysis. Refinement happens before
+dispatch; it never filters findings afterward or shares mutable production/test
+state.
+
+The executable regression contract in `test/fixtures/member_flow_contract.json`
+keeps the original eight callable obligations separate from eighteen later
+review obligations, four nonnull controls and one older assignment regression.
+Its test runs each source, checks the runtime witness, requires ordinary dead
+findings and protects live callables and constructed owner types. Runtime output
+corroborates source reasoning; it is not proof of exhaustive dead-code
+discovery. Existing whole-type, disconnected-cycle, production/test and
+application checks remain required independently of these callable counts.
+
 Selector lookup covers both method tear-offs from property reads and callable
 getters/fields from invocations. Invoking a getter can enqueue a `call` selector
 for its result type; the fixed point includes newly added selectors even when no

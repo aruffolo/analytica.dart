@@ -1,5 +1,10 @@
 ## 0.1.2-wip
 
+- Track receiver values at individual uses to find obsolete method bodies and
+  their helpers after assignments, alias snapshots, loop writes and bounded
+  callback execution. Preserve skipped null-aware effects and distinguish
+  supported completed-future suspension from synchronous execution.
+
 - Reuse compatible receiver filtering within each dispatch pass to reduce
   repeated work in large applications with many test witnesses.
 

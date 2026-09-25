@@ -1,0 +1,493 @@
+{
+  "description": "Frozen public-engine callable recall obligations from independently authored review programs. Synthetic language cases, not natural application discoveries. Runtime witnesses corroborate the source rationales. Null-shortening controls deliberately scope assertions to receiver callables.",
+  "cases": [
+    {
+      "name": "captured_reassignment",
+      "group": "original",
+      "source": "abstract class Port { void run(); }\nclass North implements Port { void run(){ northEffect(); } }\nclass South implements Port { void run(){ southEffect(); } }\nclass Spare implements Port { void run(){ spareEffect(); } void touch(){} }\nvoid northEffect(){ print('north'); }\nvoid southEffect(){ print('south'); }\nvoid spareEffect(){ print('spare'); }\nvoid main(){ Port receiver=North(); void callback(){ receiver.run(); } final action=callback; receiver=South(); Spare().touch(); action(); }\n",
+      "stdout": "south\n",
+      "dead": [
+        "North.run",
+        "northEffect",
+        "Spare.run",
+        "spareEffect"
+      ],
+      "live": [
+        "South.run",
+        "southEffect",
+        "North",
+        "South",
+        "Spare"
+      ],
+      "targets": [
+        "North.run",
+        "northEffect"
+      ],
+      "exact": true,
+      "rationale": "The named callback reads the captured cell only after replacement; the initial method body is never called."
+    },
+    {
+      "name": "alias_before_rebind",
+      "group": "original",
+      "source": "abstract class Port { void run(); }\nclass North implements Port { void run(){ northEffect(); } }\nclass South implements Port { void run(){ southEffect(); } }\nclass Spare implements Port { void run(){ spareEffect(); } void touch(){} }\nvoid northEffect(){ print('north'); }\nvoid southEffect(){ print('south'); }\nvoid spareEffect(){ print('spare'); }\nvoid main(){ Port receiver=North(); final original=receiver; receiver=South(); Spare().touch(); original.run(); }\n",
+      "stdout": "north\n",
+      "dead": [
+        "South.run",
+        "southEffect",
+        "Spare.run",
+        "spareEffect"
+      ],
+      "live": [
+        "North.run",
+        "northEffect",
+        "North",
+        "South",
+        "Spare"
+      ],
+      "targets": [
+        "South.run",
+        "southEffect"
+      ],
+      "exact": true,
+      "rationale": "The alias keeps the original object; replacement does not modify the saved value."
+    },
+    {
+      "name": "formal_reassignment",
+      "group": "original",
+      "source": "abstract class Port { void run(); }\nclass North implements Port { void run(){ northEffect(); } }\nclass South implements Port { void run(){ southEffect(); } }\nclass Spare implements Port { void run(){ spareEffect(); } void touch(){} }\nvoid northEffect(){ print('north'); }\nvoid southEffect(){ print('south'); }\nvoid spareEffect(){ print('spare'); }\nvoid deliver(Port receiver){ receiver=South(); receiver.run(); }\nvoid main(){ Spare().touch(); deliver(North()); }\n",
+      "stdout": "south\n",
+      "dead": [
+        "North.run",
+        "northEffect",
+        "Spare.run",
+        "spareEffect"
+      ],
+      "live": [
+        "South.run",
+        "southEffect",
+        "deliver",
+        "North",
+        "South",
+        "Spare"
+      ],
+      "targets": [
+        "North.run",
+        "northEffect"
+      ],
+      "exact": true,
+      "rationale": "The formal is overwritten before its only method invocation."
+    },
+    {
+      "name": "loop_reassignment",
+      "group": "original",
+      "source": "abstract class Port { void run(); }\nclass North implements Port { void run(){ northEffect(); } }\nclass South implements Port { void run(){ southEffect(); } }\nclass Spare implements Port { void run(){ spareEffect(); } void touch(){} }\nvoid northEffect(){ print('north'); }\nvoid southEffect(){ print('south'); }\nvoid spareEffect(){ print('spare'); }\nvoid main(){ Port receiver=North(); for(var i=0;i<1;i++){ receiver=South(); } Spare().touch(); receiver.run(); }\n",
+      "stdout": "south\n",
+      "dead": [
+        "North.run",
+        "northEffect",
+        "Spare.run",
+        "spareEffect"
+      ],
+      "live": [
+        "South.run",
+        "southEffect",
+        "North",
+        "South",
+        "Spare"
+      ],
+      "targets": [
+        "North.run",
+        "northEffect"
+      ],
+      "exact": true,
+      "rationale": "The bounded loop executes one replacement before the only receiver invocation."
+    },
+    {
+      "name": "alias_chain_snapshot",
+      "group": "independent",
+      "source": "abstract class Emitter { void fire(); }\nclass Amber implements Emitter { void fire() { amberEffect(); } }\nclass Blue implements Emitter { void fire() { blueEffect(); } }\nclass Spare implements Emitter { void fire() { spareEffect(); } void touch() {} }\nvoid amberEffect() { print('amber'); }\nvoid blueEffect() { print('blue'); }\nvoid spareEffect() { print('spare'); }\nvoid main() {\n  Emitter current = Amber();\n  final first = current;\n  final second = first;\n  current = Blue();\n  Spare().touch();\n  second.fire();\n}\n",
+      "stdout": "amber\n",
+      "dead": [
+        "Blue.fire",
+        "blueEffect",
+        "Spare.fire",
+        "spareEffect"
+      ],
+      "live": [
+        "Amber.fire",
+        "amberEffect",
+        "Amber",
+        "Blue",
+        "Spare"
+      ],
+      "targets": [
+        "Blue.fire",
+        "blueEffect"
+      ],
+      "exact": true,
+      "rationale": "Two aliases preserve the old value; rebinding the original variable does not change either alias."
+    },
+    {
+      "name": "alias_chain_both_values",
+      "group": "independent",
+      "source": "abstract class Emitter { void fire(); }\nclass Amber implements Emitter { void fire() { amberEffect(); } }\nclass Blue implements Emitter { void fire() { blueEffect(); } }\nclass Spare implements Emitter { void fire() { spareEffect(); } void touch() {} }\nvoid amberEffect() { print('amber'); }\nvoid blueEffect() { print('blue'); }\nvoid spareEffect() { print('spare'); }\nvoid main() {\n  Emitter current = Amber();\n  final first = current;\n  final second = first;\n  current = Blue();\n  Spare().touch();\n  second.fire();\n  current.fire();\n}\n",
+      "stdout": "amber\nblue\n",
+      "dead": [
+        "Spare.fire",
+        "spareEffect"
+      ],
+      "live": [
+        "Amber.fire",
+        "amberEffect",
+        "Blue.fire",
+        "blueEffect",
+        "Amber",
+        "Blue",
+        "Spare"
+      ],
+      "targets": [],
+      "exact": true,
+      "rationale": "The added call uses the rebound variable, so both old and new methods execute."
+    },
+    {
+      "name": "formal_write_after_snapshot",
+      "group": "independent",
+      "source": "abstract class Emitter { void fire(); }\nclass Amber implements Emitter { void fire() { amberEffect(); } }\nclass Blue implements Emitter { void fire() { blueEffect(); } }\nclass Spare implements Emitter { void fire() { spareEffect(); } void touch() {} }\nvoid amberEffect() { print('amber'); }\nvoid blueEffect() { print('blue'); }\nvoid spareEffect() { print('spare'); }\nvoid deliver(Emitter current) {\n  final saved = current;\n  current = Blue();\n  current.fire();\n}\nvoid main() { Spare().touch(); deliver(Amber()); }\n",
+      "stdout": "blue\n",
+      "dead": [
+        "Amber.fire",
+        "amberEffect",
+        "Spare.fire",
+        "spareEffect"
+      ],
+      "live": [
+        "Blue.fire",
+        "blueEffect",
+        "Amber",
+        "Blue",
+        "Spare"
+      ],
+      "targets": [
+        "Amber.fire",
+        "amberEffect"
+      ],
+      "exact": true,
+      "rationale": "Saving but never using the old argument does not execute its method; the formal is overwritten before the call."
+    },
+    {
+      "name": "formal_saved_value_used",
+      "group": "independent",
+      "source": "abstract class Emitter { void fire(); }\nclass Amber implements Emitter { void fire() { amberEffect(); } }\nclass Blue implements Emitter { void fire() { blueEffect(); } }\nclass Spare implements Emitter { void fire() { spareEffect(); } void touch() {} }\nvoid amberEffect() { print('amber'); }\nvoid blueEffect() { print('blue'); }\nvoid spareEffect() { print('spare'); }\nvoid deliver(Emitter current) {\n  final saved = current;\n  current = Blue();\n  saved.fire();\n  current.fire();\n}\nvoid main() { Spare().touch(); deliver(Amber()); }\n",
+      "stdout": "amber\nblue\n",
+      "dead": [
+        "Spare.fire",
+        "spareEffect"
+      ],
+      "live": [
+        "Amber.fire",
+        "amberEffect",
+        "Blue.fire",
+        "blueEffect",
+        "Amber",
+        "Blue",
+        "Spare"
+      ],
+      "targets": [],
+      "exact": true,
+      "rationale": "The saved formal argument and its new value are both used, preventing an unsound overwrite kill."
+    },
+    {
+      "name": "loop_guaranteed_write",
+      "group": "independent",
+      "source": "abstract class Emitter { void fire(); }\nclass Amber implements Emitter { void fire() { amberEffect(); } }\nclass Blue implements Emitter { void fire() { blueEffect(); } }\nclass Spare implements Emitter { void fire() { spareEffect(); } void touch() {} }\nvoid amberEffect() { print('amber'); }\nvoid blueEffect() { print('blue'); }\nvoid spareEffect() { print('spare'); }\nvoid main() {\n  Emitter current = Amber();\n  Spare().touch();\n  do {\n    current = Blue();\n    continue;\n  } while (false);\n  current.fire();\n}\n",
+      "stdout": "blue\n",
+      "dead": [
+        "Amber.fire",
+        "amberEffect",
+        "Spare.fire",
+        "spareEffect"
+      ],
+      "live": [
+        "Blue.fire",
+        "blueEffect",
+        "Amber",
+        "Blue",
+        "Spare"
+      ],
+      "targets": [
+        "Amber.fire",
+        "amberEffect"
+      ],
+      "exact": true,
+      "rationale": "A do-loop executes its write once even with a false condition; continue reaches the condition."
+    },
+    {
+      "name": "loop_zero_trip_old_value",
+      "group": "independent",
+      "source": "abstract class Emitter { void fire(); }\nclass Amber implements Emitter { void fire() { amberEffect(); } }\nclass Blue implements Emitter { void fire() { blueEffect(); } }\nclass Spare implements Emitter { void fire() { spareEffect(); } void touch() {} }\nvoid amberEffect() { print('amber'); }\nvoid blueEffect() { print('blue'); }\nvoid spareEffect() { print('spare'); }\nvoid main() {\n  Emitter current = Amber();\n  Spare().touch();\n  Blue();\n  while (false) {\n    current = Blue();\n    continue;\n  }\n  current.fire();\n}\n",
+      "stdout": "amber\n",
+      "dead": [
+        "Blue.fire",
+        "blueEffect",
+        "Spare.fire",
+        "spareEffect"
+      ],
+      "live": [
+        "Amber.fire",
+        "amberEffect",
+        "Amber",
+        "Blue",
+        "Spare"
+      ],
+      "targets": [
+        "Blue.fire",
+        "blueEffect"
+      ],
+      "exact": true,
+      "rationale": "A while-loop with a false condition executes no write; separately allocating Blue prevents allocation absence from hiding this control."
+    },
+    {
+      "name": "callback_reads_mutable_cell",
+      "group": "independent",
+      "source": "abstract class Emitter { void fire(); }\nclass Amber implements Emitter { void fire() { amberEffect(); } }\nclass Blue implements Emitter { void fire() { blueEffect(); } }\nclass Spare implements Emitter { void fire() { spareEffect(); } void touch() {} }\nvoid amberEffect() { print('amber'); }\nvoid blueEffect() { print('blue'); }\nvoid spareEffect() { print('spare'); }\nvoid invoke(void Function() action) { action(); }\nvoid main() {\n  Emitter current = Amber();\n  final saved = current;\n  final action = () { current.fire(); };\n  current = Blue();\n  Spare().touch();\n  invoke(action);\n}\n",
+      "stdout": "blue\n",
+      "dead": [
+        "Amber.fire",
+        "amberEffect",
+        "Spare.fire",
+        "spareEffect"
+      ],
+      "live": [
+        "Blue.fire",
+        "blueEffect",
+        "Amber",
+        "Blue",
+        "Spare"
+      ],
+      "targets": [
+        "Amber.fire",
+        "amberEffect"
+      ],
+      "exact": true,
+      "rationale": "A callback passed through a synchronous helper reads the current variable value when called, not when created."
+    },
+    {
+      "name": "callback_reads_saved_value",
+      "group": "independent",
+      "source": "abstract class Emitter { void fire(); }\nclass Amber implements Emitter { void fire() { amberEffect(); } }\nclass Blue implements Emitter { void fire() { blueEffect(); } }\nclass Spare implements Emitter { void fire() { spareEffect(); } void touch() {} }\nvoid amberEffect() { print('amber'); }\nvoid blueEffect() { print('blue'); }\nvoid spareEffect() { print('spare'); }\nvoid invoke(void Function() action) { action(); }\nvoid main() {\n  Emitter current = Amber();\n  final saved = current;\n  final action = () { saved.fire(); };\n  current = Blue();\n  Spare().touch();\n  invoke(action);\n}\n",
+      "stdout": "amber\n",
+      "dead": [
+        "Blue.fire",
+        "blueEffect",
+        "Spare.fire",
+        "spareEffect"
+      ],
+      "live": [
+        "Amber.fire",
+        "amberEffect",
+        "Amber",
+        "Blue",
+        "Spare"
+      ],
+      "targets": [
+        "Blue.fire",
+        "blueEffect"
+      ],
+      "exact": true,
+      "rationale": "Only changing the captured binding to saved restores the original receiver; the overwritten variable is unused."
+    },
+    {
+      "name": "returned_callback_after_local_write",
+      "group": "independent",
+      "source": "abstract class Emitter { void fire(); }\nclass Amber implements Emitter { void fire() { amberEffect(); } }\nclass Blue implements Emitter { void fire() { blueEffect(); } }\nclass Spare implements Emitter { void fire() { spareEffect(); } void touch() {} }\nvoid amberEffect() { print('amber'); }\nvoid blueEffect() { print('blue'); }\nvoid spareEffect() { print('spare'); }\nvoid Function() prepare() {\n  Emitter current = Amber();\n  void replace() { current = Blue(); }\n  void action() { current.fire(); }\n  replace();\n  return action;\n}\nvoid main() { Spare().touch(); final action = prepare(); action(); }\n",
+      "stdout": "blue\n",
+      "dead": [
+        "Amber.fire",
+        "amberEffect",
+        "Spare.fire",
+        "spareEffect"
+      ],
+      "live": [
+        "Blue.fire",
+        "blueEffect",
+        "Amber",
+        "Blue",
+        "Spare"
+      ],
+      "targets": [
+        "Amber.fire",
+        "amberEffect"
+      ],
+      "exact": true,
+      "rationale": "A called nested function mutates the captured cell before its reader escapes and is invoked."
+    },
+    {
+      "name": "returned_callback_before_and_after",
+      "group": "independent",
+      "source": "abstract class Emitter { void fire(); }\nclass Amber implements Emitter { void fire() { amberEffect(); } }\nclass Blue implements Emitter { void fire() { blueEffect(); } }\nclass Spare implements Emitter { void fire() { spareEffect(); } void touch() {} }\nvoid amberEffect() { print('amber'); }\nvoid blueEffect() { print('blue'); }\nvoid spareEffect() { print('spare'); }\nvoid Function() prepare() {\n  Emitter current = Amber();\n  void replace() { current = Blue(); }\n  void action() { current.fire(); }\n  action();\n  replace();\n  return action;\n}\nvoid main() { Spare().touch(); final action = prepare(); action(); }\n",
+      "stdout": "amber\nblue\n",
+      "dead": [
+        "Spare.fire",
+        "spareEffect"
+      ],
+      "live": [
+        "Amber.fire",
+        "amberEffect",
+        "Blue.fire",
+        "blueEffect",
+        "Amber",
+        "Blue",
+        "Spare"
+      ],
+      "targets": [],
+      "exact": true,
+      "rationale": "The same callback is invoked before and after the nested write; both receivers must remain live."
+    },
+    {
+      "name": "async_reads_after_resume",
+      "group": "independent",
+      "source": "abstract class Emitter { void fire(); }\nclass Amber implements Emitter { void fire() { amberEffect(); } }\nclass Blue implements Emitter { void fire() { blueEffect(); } }\nclass Spare implements Emitter { void fire() { spareEffect(); } void touch() {} }\nvoid amberEffect() { print('amber'); }\nvoid blueEffect() { print('blue'); }\nvoid spareEffect() { print('spare'); }\nFuture<void> main() async {\n  Emitter current = Amber();\n  final saved = current;\n  Future<void> later() async {\n    await Future<void>.value();\n    current.fire();\n  }\n  Spare().touch();\n  final work = later();\n  current = Blue();\n  await work;\n}\n",
+      "stdout": "blue\n",
+      "dead": [
+        "Amber.fire",
+        "amberEffect",
+        "Spare.fire",
+        "spareEffect"
+      ],
+      "live": [
+        "Blue.fire",
+        "blueEffect",
+        "Amber",
+        "Blue",
+        "Spare"
+      ],
+      "targets": [
+        "Amber.fire",
+        "amberEffect"
+      ],
+      "exact": true,
+      "rationale": "The call to later starts before rebinding, but its receiver read occurs after await resumes; no sleeps or external scheduling inputs."
+    },
+    {
+      "name": "async_reads_saved_snapshot",
+      "group": "independent",
+      "source": "abstract class Emitter { void fire(); }\nclass Amber implements Emitter { void fire() { amberEffect(); } }\nclass Blue implements Emitter { void fire() { blueEffect(); } }\nclass Spare implements Emitter { void fire() { spareEffect(); } void touch() {} }\nvoid amberEffect() { print('amber'); }\nvoid blueEffect() { print('blue'); }\nvoid spareEffect() { print('spare'); }\nFuture<void> main() async {\n  Emitter current = Amber();\n  final saved = current;\n  Future<void> later() async {\n    await Future<void>.value();\n    saved.fire();\n  }\n  Spare().touch();\n  final work = later();\n  current = Blue();\n  await work;\n}\n",
+      "stdout": "amber\n",
+      "dead": [
+        "Blue.fire",
+        "blueEffect",
+        "Spare.fire",
+        "spareEffect"
+      ],
+      "live": [
+        "Amber.fire",
+        "amberEffect",
+        "Amber",
+        "Blue",
+        "Spare"
+      ],
+      "targets": [
+        "Blue.fire",
+        "blueEffect"
+      ],
+      "exact": true,
+      "rationale": "Across the same suspension, saved still holds the old object; treating every capture as the latest receiver would be wrong."
+    },
+    {
+      "name": "null_chain",
+      "group": "null_shortening",
+      "source": "abstract class Emitter { void fire(); }\nclass Amber implements Emitter { void fire() { amberEffect(); } }\nclass Blue implements Emitter { void fire() { blueEffect(); } }\nvoid amberEffect() { print('amber'); }\nvoid blueEffect() { print('blue'); }\nclass Sink {\n  Emitter? value;\n  Sink identity() => this;\n  void accept(Emitter value) {}\n}\nvoid main() { Emitter current = Amber(); Sink? sink = null; sink?.identity().accept(current = Blue()); current.fire(); }\n",
+      "stdout": "amber\n",
+      "dead": [],
+      "live": [
+        "Amber.fire",
+        "amberEffect",
+        "Amber"
+      ],
+      "targets": [],
+      "exact": false,
+      "rationale": "The null sink skips the entire chained call/setter RHS; the original method and helper must remain live. This control does not require pruning skipped constructors or Sink members."
+    },
+    {
+      "name": "nonnull_chain",
+      "group": "null_shortening",
+      "source": "abstract class Emitter { void fire(); }\nclass Amber implements Emitter { void fire() { amberEffect(); } }\nclass Blue implements Emitter { void fire() { blueEffect(); } }\nvoid amberEffect() { print('amber'); }\nvoid blueEffect() { print('blue'); }\nclass Sink {\n  Emitter? value;\n  Sink identity() => this;\n  void accept(Emitter value) {}\n}\nvoid main() { Emitter current = Amber(); Sink? sink = Sink(); sink?.identity().accept(current = Blue()); current.fire(); }\n",
+      "stdout": "blue\n",
+      "dead": [
+        "Amber.fire",
+        "amberEffect"
+      ],
+      "live": [
+        "Blue.fire",
+        "blueEffect",
+        "Amber",
+        "Blue",
+        "Sink"
+      ],
+      "targets": [
+        "Amber.fire",
+        "amberEffect"
+      ],
+      "exact": false,
+      "rationale": "The nonnull sink evaluates the write before current.fire; the original method and helper are dead."
+    },
+    {
+      "name": "null_setter",
+      "group": "null_shortening",
+      "source": "abstract class Emitter { void fire(); }\nclass Amber implements Emitter { void fire() { amberEffect(); } }\nclass Blue implements Emitter { void fire() { blueEffect(); } }\nvoid amberEffect() { print('amber'); }\nvoid blueEffect() { print('blue'); }\nclass Sink {\n  Emitter? value;\n  Sink identity() => this;\n  void accept(Emitter value) {}\n}\nvoid main() { Emitter current = Amber(); Sink? sink = null; sink?.value = (current = Blue()); current.fire(); }\n",
+      "stdout": "amber\n",
+      "dead": [],
+      "live": [
+        "Amber.fire",
+        "amberEffect",
+        "Amber"
+      ],
+      "targets": [],
+      "exact": false,
+      "rationale": "The null sink skips the entire chained call/setter RHS; the original method and helper must remain live. This control does not require pruning skipped constructors or Sink members."
+    },
+    {
+      "name": "nonnull_setter",
+      "group": "null_shortening",
+      "source": "abstract class Emitter { void fire(); }\nclass Amber implements Emitter { void fire() { amberEffect(); } }\nclass Blue implements Emitter { void fire() { blueEffect(); } }\nvoid amberEffect() { print('amber'); }\nvoid blueEffect() { print('blue'); }\nclass Sink {\n  Emitter? value;\n  Sink identity() => this;\n  void accept(Emitter value) {}\n}\nvoid main() { Emitter current = Amber(); Sink? sink = Sink(); sink?.value = (current = Blue()); current.fire(); }\n",
+      "stdout": "blue\n",
+      "dead": [
+        "Amber.fire",
+        "amberEffect"
+      ],
+      "live": [
+        "Blue.fire",
+        "blueEffect",
+        "Amber",
+        "Blue",
+        "Sink"
+      ],
+      "targets": [
+        "Amber.fire",
+        "amberEffect"
+      ],
+      "exact": false,
+      "rationale": "The nonnull sink evaluates the write before current.fire; the original method and helper are dead."
+    },
+    {
+      "name": "ordinary_assignment",
+      "group": "earlier_regression",
+      "source": "abstract class Channel { void send(); }\nclass Before implements Channel { void send(){ print('before'); } }\nclass After implements Channel { void send(){ delivered(); } }\nvoid delivered(){ print('after'); }\nvoid main(){ Channel channel=Before(); channel=After(); channel.send(); }\n",
+      "stdout": "after\n",
+      "dead": [
+        "Before.send"
+      ],
+      "live": [
+        "After.send",
+        "delivered",
+        "Before",
+        "After"
+      ],
+      "targets": [
+        "Before.send"
+      ],
+      "exact": true,
+      "rationale": "An ordinary local write replaces the first object before its sole method call. The constructed owner remains live; its unused method does not."
+    }
+  ]
+}

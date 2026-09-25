@@ -40,7 +40,12 @@ Future<void> main() async {
         ),
         isEmpty,
       );
-      expect(findingNames(report), {'Decoy.send', 'unrelated'});
+      expect(findingNames(report), {
+        'Decoy.send',
+        'unrelated',
+        // The ordinary write replaces Before before its only possible call.
+        if (entry.key == 'ordinary assignment control') 'Before.send',
+      });
     });
   }
 
