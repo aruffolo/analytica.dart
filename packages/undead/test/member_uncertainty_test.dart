@@ -12,6 +12,29 @@ List<Map<String, dynamic>> uncertain(UndeadReport report) =>
         .cast<Map<String, dynamic>>();
 
 void main() {
+  test('assumed return receivers explain downstream uncertainty', () async {
+    final report = await memberFixture('''
+class Maker { Action make() => Action(); }
+class Action {
+  void run() { helper(); }
+  void unused() { deadHelper(); }
+}
+void helper() {}
+void deadHelper() {}
+void main() { <Maker>[Maker()].single.make().run(); }
+''');
+    expect(findingNames(report), {'Action.unused', 'deadHelper'});
+    final candidates = uncertain(report);
+    expect(candidates.map((f) => f['name']).toSet(), {
+      'Maker.make',
+      'Action.run',
+      'helper',
+    });
+    for (final finding in candidates) {
+      expect(finding['retentionReasons'], contains('unresolvedReceiver'));
+    }
+  });
+
   test(
     'protocol-only bodies and exclusive helpers remain reviewable',
     () async {

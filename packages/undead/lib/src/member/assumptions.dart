@@ -1,3 +1,4 @@
+import 'flow.dart';
 import 'graph.dart';
 
 /// Tracks conservative retention separately from ordinary unreachable findings.
@@ -15,7 +16,27 @@ class AssumptionTrace {
   void indirect(String key, DispatchSlot slot) =>
       _indirect.putIfAbsent(key, () => {}).add(slot);
 
-  Map<String, Set<String>> reasons(MemberGraph graph, Set<String> live) {
+  void _connectReturns(ReceiverBindings bindings) {
+    // Follow final value dependencies too: a call in an explicit body can
+    // consume a receiver returned only by an assumption-retained method.
+    for (final slot in _targets.keys) {
+      final origin = bindings.resolve(
+        slot.receiver ?? ReceiverOrigin.unknownValue,
+      );
+      for (final reference in origin.references) {
+        if (reference.startsWith('return#')) {
+          indirect(reference.substring('return#'.length), slot);
+        }
+      }
+    }
+  }
+
+  Map<String, Set<String>> reasons(
+    MemberGraph graph,
+    Set<String> live,
+    ReceiverBindings bindings,
+  ) {
+    _connectReturns(bindings);
     final result = <String, Set<String>>{};
     final pending = <(String, String)>[
       for (final entry in _seeds.entries)

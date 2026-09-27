@@ -3,6 +3,7 @@ import 'package:analyzer/dart/analysis/results.dart';
 import 'package:analyzer/dart/ast/ast.dart' hide WildcardPattern;
 import 'package:analyzer/dart/ast/visitor.dart';
 import 'package:analyzer/dart/element/element.dart';
+import 'package:analyzer/dart/element/type.dart';
 
 import '../comment_parser.dart';
 import '../models.dart';
@@ -23,10 +24,13 @@ String elementKey(Element element) {
   final owner = base.enclosingElement;
   if (base is LocalFunctionElement ||
       base is LocalVariableElement ||
-      base is FormalParameterElement) {
+      base is FormalParameterElement ||
+      (base is ExtensionElement && base.name == null)) {
     return '$source#${base.kind}#${base.firstFragment.offset}';
   }
-  final ownerName = owner is InstanceElement ? owner.name : '';
+  final ownerName = owner is InstanceElement
+      ? owner.name ?? '@${owner.firstFragment.offset}'
+      : '';
   return '$source#$ownerName#${base.kind}#${base.lookupName}';
 }
 
@@ -49,6 +53,15 @@ class MemberNode {
   });
 
   String get key => elementKey(element);
+  String get reportId {
+    final declaring = owner?.element ?? element;
+    final suffix = declaring is ExtensionElement && declaring.name == null
+        ? '#${declaring.firstFragment.offset}'
+        : '';
+    return '${declaration.relativeFilePath}#${declaration.kind.jsonValue}'
+        '#${declaration.name}$suffix';
+  }
+
   bool get isMethod => element is MethodElement;
   bool get isExecution =>
       element is ExecutableElement && element is! ConstructorElement;
@@ -58,6 +71,7 @@ class MemberEdges {
   final Set<String> direct = {};
   final Set<ConstructorElement> constructions = {};
   final Set<DispatchSlot> slots = {};
+  final Set<ConstructorCall> constructorCalls = {};
   final Set<InterfaceElement> escapedTypes = {};
   final Set<InterfaceElement> runtimeTypes = {};
   final Map<String, Set<ReceiverOrigin>> bindings = {};
@@ -103,6 +117,7 @@ class DispatchSlot {
   final ReceiverOrigin? receiver;
   final List<CallArgument> arguments;
   final bool assumed;
+  final String? result;
   const DispatchSlot(
     this.owner,
     this.name,
@@ -111,6 +126,7 @@ class DispatchSlot {
     this.receiver,
     this.arguments = const [],
     this.assumed = false,
+    this.result,
   });
 
   DispatchSlot get selector => DispatchSlot(owner, name, library, kind);
@@ -124,10 +140,19 @@ class DispatchSlot {
       other.kind == kind &&
       other.receiver == receiver &&
       other.arguments == arguments &&
+      other.result == result &&
       other.assumed == assumed;
   @override
-  int get hashCode =>
-      Object.hash(owner, name, library, kind, receiver, arguments, assumed);
+  int get hashCode => Object.hash(
+    owner,
+    name,
+    library,
+    kind,
+    receiver,
+    arguments,
+    assumed,
+    result,
+  );
 }
 
 class MemberGraph {
@@ -139,9 +164,13 @@ class MemberGraph {
   dispatchCache = {};
   final Map<InterfaceElement, List<MemberNode>> protocolCache = {};
   final Map<Expression, ReceiverOrigin> receiverValues = {};
+  final Map<Expression, String> _resultKeys = {};
+  String resultKey(Expression expression) =>
+      _resultKeys.putIfAbsent(expression, () => 'call#${_resultKeys.length}');
   final Set<String> productionRoots = {};
   final Set<String> testRoots = {};
   final Map<TestBlockSite, MemberEdges> testSites = {};
+  final Map<TestBlockSite, List<MemberEdges>> testFixtures = {};
   final List<CoverageLimitation> limitations = [];
   final Set<(String, String, int)> _limitationKeys = {};
   final Map<String, Set<String>> conditionalTargets = {};
@@ -158,8 +187,10 @@ class MemberGraph {
       packageName: topology.packageName,
       conditionalTargets: conditionalTargets,
     );
-    if (topology.roleOf(file) == FileRole.test) {
-      unit.unit.accept(_TestSites(this, unit, file));
+    if (reportable && topology.roleOf(file) == FileRole.test) {
+      final sites = _TestSites(this, unit, file);
+      unit.unit.accept(sites);
+      sites.connectFixtures();
     }
   }
 
@@ -223,6 +254,7 @@ class MemberGraph {
     _connectConditionals();
     // Expression refinements are consumed only while connecting body edges.
     receiverValues.clear();
+    _resultKeys.clear();
   }
 
   void _connectConstructor(MemberNode node) {
@@ -230,10 +262,14 @@ class MemberGraph {
     if (element is! ConstructorElement) return;
     final redirected = element.redirectedConstructor;
     if (redirected != null) {
-      node.edges.constructions.add(redirected);
+      if (element.isFactory) {
+        _forwardFactory(node, element, redirected);
+      } else {
+        _forwardConstructor(node, redirected);
+      }
     } else {
       final parent = element.superConstructor;
-      if (parent != null) node.edges.direct.add(elementKey(parent));
+      if (parent != null) _forwardConstructor(node, parent);
     }
     if (element.isFactory) return;
     final owner = element.enclosingElement;
@@ -245,6 +281,47 @@ class MemberGraph {
       if (!field.isStatic && !field.isLate) {
         node.edges.direct.add(elementKey(field));
       }
+    }
+  }
+
+  void _forwardFactory(
+    MemberNode node,
+    ConstructorElement factory,
+    ConstructorElement target,
+  ) {
+    node.edges.constructions.add(target);
+    final arguments = [
+      for (final parameter in factory.formalParameters)
+        CallArgument(
+          parameter.isNamed ? parameter.name : null,
+          ReceiverOrigin(references: {elementKey(parameter)}),
+        ),
+    ];
+    for (final entry in callBindings(target, arguments).entries) {
+      node.edges.bind(elementKey(entry.key), entry.value);
+    }
+  }
+
+  void _forwardConstructor(MemberNode node, ConstructorElement target) {
+    node.edges.direct.add(elementKey(target));
+    node.edges.bind(
+      'this#${elementKey(target)}',
+      ReceiverOrigin(references: {'this#${node.key}'}),
+    );
+    _forwardSuperParameters(node);
+  }
+
+  void _forwardSuperParameters(MemberNode node) {
+    final constructor = node.element as ConstructorElement;
+    for (final parameter
+        in constructor.formalParameters
+            .whereType<SuperFormalParameterElement>()) {
+      final parent = parameter.superConstructorParameter;
+      if (parent == null) continue;
+      node.edges.bind(
+        elementKey(parent),
+        ReceiverOrigin(references: {elementKey(parameter)}),
+      );
     }
   }
 
@@ -264,20 +341,23 @@ class MemberGraph {
         isExtraProductionRoot(decl, topology) ||
         demonstration) {
       productionRoots.add(node.key);
-      final element = node.element;
-      if (element is ExecutableElement &&
-          !element.isStatic &&
-          element.enclosingElement is InterfaceElement) {
-        node.edges.runtimeTypes.add(
-          element.enclosingElement as InterfaceElement,
-        );
-      }
-      // Explicit class roots name a runtime surface, not just a type use.
-      if (node.structural) {
-        productionRoots.addAll(
-          nodes.values.where((n) => n.owner == node).map((n) => n.key),
-        );
-      }
+      _rootSurface(node);
+    }
+  }
+
+  void _rootSurface(MemberNode node) {
+    final element = node.element;
+    if (element is ExecutableElement &&
+        !element.isStatic &&
+        element.enclosingElement is InterfaceElement) {
+      node.edges.runtimeTypes.add(element.enclosingElement as InterfaceElement);
+    }
+    // Explicit class roots name a runtime surface, not just a type use.
+    if (node.structural) {
+      if (element is InterfaceElement) node.edges.runtimeTypes.add(element);
+      productionRoots.addAll(
+        nodes.values.where((n) => n.owner == node).map((n) => n.key),
+      );
     }
   }
 
@@ -490,7 +570,68 @@ class _TestSites extends RecursiveAstVisitor<void> {
   final MemberGraph graph;
   final ResolvedUnitResult unit;
   final String file;
+  final Map<TestBlockSite, MethodInvocation> _calls = {};
+  final Map<MethodInvocation, MemberEdges> _fixtures = {};
+  final Map<FunctionBody, MemberEdges> _registrations = {};
+  final Map<Element, Set<Expression>> _localValues = {};
   _TestSites(this.graph, this.unit, this.file);
+
+  void connectFixtures() {
+    for (final entry in _calls.entries) {
+      final aliases = _CallbackAliases(
+        _localValues,
+        MemberReferences(
+          graph,
+          graph.testSites[entry.key]!,
+          unit.libraryElement,
+        ),
+      );
+      entry.value.argumentList.accept(aliases);
+      final scopes = <AstNode>{};
+      for (var node = entry.value.parent; node != null; node = node.parent) {
+        scopes.add(node);
+      }
+      graph.testFixtures[entry.key] = [
+        for (final body in scopes.whereType<FunctionBody>())
+          _registration(body),
+        for (final fixture in _fixtures.entries)
+          if (fixture.key != entry.value &&
+              scopes.contains(fixture.key.thisOrAncestorOfType<FunctionBody>()))
+            fixture.value,
+      ];
+    }
+  }
+
+  @override
+  void visitVariableDeclaration(VariableDeclaration node) {
+    final element = node.declaredFragment?.element;
+    final value = node.initializer;
+    if (element is LocalVariableElement && value != null) {
+      _localValues.putIfAbsent(element, () => {}).add(value);
+    }
+    super.visitVariableDeclaration(node);
+  }
+
+  @override
+  void visitAssignmentExpression(AssignmentExpression node) {
+    final element = node.writeElement;
+    if (element is LocalVariableElement) {
+      _localValues.putIfAbsent(element, () => {}).add(node.rightHandSide);
+    }
+    super.visitAssignmentExpression(node);
+  }
+
+  MemberEdges _registration(FunctionBody body) =>
+      _registrations.putIfAbsent(body, () {
+        final edges = MemberEdges();
+        body.accept(
+          _RegistrationBindings(
+            MemberReferences(graph, edges, unit.libraryElement),
+          ),
+        );
+        return edges;
+      });
+
   @override
   void visitMethodInvocation(MethodInvocation node) {
     final adapter = graph.options.frameworkAdapter;
@@ -512,7 +653,53 @@ class _TestSites extends RecursiveAstVisitor<void> {
         argument.accept(MemberReferences(graph, edges, unit.libraryElement));
       }
       graph.testSites[site] = edges;
+      _calls[site] = node;
+      if (adapter.isTestHarnessSite(node)) _fixtures[node] = edges;
     }
     super.visitMethodInvocation(node);
+  }
+}
+
+/// Capture lexical registration values without executing sibling callbacks.
+class _RegistrationBindings extends RecursiveAstVisitor<void> {
+  final MemberReferences references;
+  _RegistrationBindings(this.references);
+
+  @override
+  void visitFunctionExpression(FunctionExpression node) {}
+  @override
+  void visitFunctionDeclaration(FunctionDeclaration node) {}
+  @override
+  void visitVariableDeclaration(VariableDeclaration node) {
+    if (node.initializer?.staticType is! FunctionType) node.accept(references);
+  }
+
+  @override
+  void visitAssignmentExpression(AssignmentExpression node) {
+    if (node.rightHandSide.staticType is! FunctionType) node.accept(references);
+  }
+}
+
+/// Follow only local values referenced by the selected registration arguments.
+class _CallbackAliases extends RecursiveAstVisitor<void> {
+  final Map<Element, Set<Expression>> values;
+  final MemberReferences references;
+  final Set<Element> _seen = {};
+  _CallbackAliases(this.values, this.references);
+
+  @override
+  void visitVariableDeclaration(VariableDeclaration node) {}
+  @override
+  void visitFunctionDeclaration(FunctionDeclaration node) {}
+  @override
+  void visitSimpleIdentifier(SimpleIdentifier node) {
+    final element = node.element;
+    if (node.inDeclarationContext() || element == null || !_seen.add(element)) {
+      return;
+    }
+    for (final value in values[element] ?? <Expression>{}) {
+      value.accept(references);
+      value.accept(this);
+    }
   }
 }

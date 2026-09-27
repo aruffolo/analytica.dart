@@ -3,6 +3,75 @@ import 'package:test/test.dart';
 import 'support/member_fixture.dart';
 
 void main() {
+  _foreignArgumentTests();
+
+  test('external root parameters remain open to external callers', () async {
+    final report = await memberFixture('''
+abstract class Action { void run(); }
+class A implements Action { void run() { aEffect(); } }
+class B implements Action { void run() { bEffect(); } }
+class Spare { void run() { deadEffect(); } }
+void aEffect() {}
+void bEffect() {}
+void deadEffect() {}
+@pragma('vm:entry-point')
+void enter(Action value) { value.run(); }
+void main() { enter(A()); B(); Spare(); }
+''');
+    expect(findingNames(report), {'Spare.run', 'deadEffect'});
+  });
+
+  test('class roots allocate receivers for inherited calls', () async {
+    final report = await memberFixture('''
+class Base {
+  void inherited() { liveEffect(); }
+  void unused() { deadEffect(); }
+}
+@pragma('vm:entry-point')
+class Child extends Base {
+  Child();
+  void enter() { inherited(); }
+}
+void liveEffect() {}
+void deadEffect() {}
+void main() {}
+''');
+    expect(findingNames(report), {'Base.unused', 'deadEffect'});
+  });
+
+  for (final boundary in ['protocol', 'escape']) {
+    test(
+      '$boundary retention binds inherited implementation receivers',
+      () async {
+        final entry = boundary == 'protocol'
+            ? 'Base().toString(); print(Child());'
+            : 'Base().invoke(); register(Child());';
+        final protocol = boundary == 'protocol'
+            ? "@override String toString() { _hook(); return ''; }"
+            : '';
+        final report = await memberFixture('''
+external void register(dynamic value);
+class Base {
+  $protocol
+  void invoke() { _hook(); }
+  void _hook() { baseEffect(); }
+}
+class Child extends Base { @override void _hook() { childEffect(); } }
+class Spare { void unused() { deadEffect(); } }
+void baseEffect() {}
+void childEffect() {}
+void deadEffect() {}
+void main() { Spare(); $entry }
+''');
+        expect(
+          findingNames(report),
+          containsAll(['Spare.unused', 'deadEffect']),
+        );
+        expect(findingNames(report), isNot(contains('childEffect')));
+      },
+    );
+  }
+
   test(
     'reachable tear-offs preserve dependencies; dead closures do not',
     () async {
@@ -223,4 +292,43 @@ void hiddenEffect() {}
 ''');
     expect(findingNames(report), {'Meter.unused', 'Meter.-', 'hiddenEffect'});
   });
+}
+
+void _foreignArgumentTests() {
+  for (final (named, dynamicValue) in [
+    (false, false),
+    (true, false),
+    (false, true),
+    (true, true),
+  ]) {
+    test(
+      'foreign named=$named dynamic=$dynamicValue preserves dead methods',
+      () async {
+        final report = await memberFixture(_foreignSource(named, dynamicValue));
+        const dead = {'Other.callback', 'deadEffect'};
+        expect(findingNames(report), dynamicValue ? containsAll(dead) : dead);
+        if (!dynamicValue) {
+          expect(
+            report.coverageLimitations.map((l) => l.code),
+            contains('externalEscape'),
+          );
+        }
+      },
+    );
+  }
+}
+
+String _foreignSource(bool named, bool dynamicValue) {
+  final parameter = named ? '{required dynamic value}' : 'dynamic value';
+  final argument = named ? 'value: value' : 'value';
+  final type = dynamicValue ? 'dynamic' : 'Service';
+  final inheritance = dynamicValue ? 'extends Service' : '';
+  return '''
+external void register($parameter);
+void main() { $type value = Service(); Other(); register($argument); }
+class Service { void callback() { callbackEffect(); } }
+class Other $inheritance { void callback() { deadEffect(); } }
+void callbackEffect() {}
+void deadEffect() {}
+''';
 }

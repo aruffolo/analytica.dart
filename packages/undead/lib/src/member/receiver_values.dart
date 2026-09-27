@@ -574,6 +574,8 @@ class ReceiverValues {
             entry.value.unknown == other.unknown &&
             entry.value.types.length == other.types.length &&
             entry.value.types.containsAll(other.types) &&
+            entry.value.constructors.length == other.constructors.length &&
+            entry.value.constructors.containsAll(other.constructors) &&
             entry.value.references.length == other.references.length &&
             entry.value.references.containsAll(other.references);
       });
@@ -850,11 +852,14 @@ class ReceiverValues {
     _step(
       a.types.length +
           b.types.length +
+          a.constructors.length +
+          b.constructors.length +
           a.references.length +
           b.references.length,
     );
     return ReceiverOrigin(
       types: {...a.types, ...b.types},
+      constructors: {...a.constructors, ...b.constructors},
       references: {...a.references, ...b.references},
       unknown: a.unknown || b.unknown,
     );

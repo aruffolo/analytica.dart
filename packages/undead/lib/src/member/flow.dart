@@ -4,10 +4,12 @@ import 'package:analyzer/dart/element/element.dart';
 /// or an explicit unknown. Each reachability run owns the resolved bindings.
 class ReceiverOrigin {
   final Set<InterfaceElement> types;
+  final Set<ConstructorElement> constructors;
   final Set<String> references;
   final bool unknown;
   const ReceiverOrigin({
     this.types = const {},
+    this.constructors = const {},
     this.references = const {},
     this.unknown = false,
   });
@@ -18,6 +20,12 @@ class CallArgument {
   final String? name;
   final ReceiverOrigin value;
   const CallArgument(this.name, this.value);
+}
+
+class ConstructorCall {
+  final ReceiverOrigin target;
+  final List<CallArgument> arguments;
+  const ConstructorCall(this.target, this.arguments);
 }
 
 class ReceiverBindings {
@@ -37,12 +45,14 @@ class ReceiverBindings {
 
   ReceiverOrigin _resolve(ReceiverOrigin origin) {
     final types = <InterfaceElement>{};
+    final constructors = <ConstructorElement>{};
     final visited = <String>{};
     final pending = <ReceiverOrigin>[origin];
     var unknown = false;
     while (pending.isNotEmpty) {
       final value = pending.removeLast();
       types.addAll(value.types);
+      constructors.addAll(value.constructors);
       unknown |= value.unknown;
       for (final key in value.references) {
         if (!visited.add(key)) continue;
@@ -54,14 +64,20 @@ class ReceiverBindings {
         }
       }
     }
-    return ReceiverOrigin(types: types, unknown: unknown || types.isEmpty);
+    return ReceiverOrigin(
+      types: types,
+      constructors: constructors,
+      references: visited,
+      unknown: unknown || (types.isEmpty && constructors.isEmpty),
+    );
   }
 }
 
 Map<FormalParameterElement, ReceiverOrigin> callBindings(
   ExecutableElement target,
-  List<CallArgument> arguments,
-) {
+  List<CallArgument> arguments, {
+  Map<Element, ReceiverOrigin> forwarded = const {},
+}) {
   final result = <FormalParameterElement, ReceiverOrigin>{};
   final positional = target.formalParameters
       .where((p) => p.isPositional)
@@ -78,7 +94,10 @@ Map<FormalParameterElement, ReceiverOrigin> callBindings(
   // Omitted defaults and escaped tear-offs have no modeled actual value.
   // An earlier supplied argument must not narrow those other invocations.
   for (final parameter in target.formalParameters) {
-    result.putIfAbsent(parameter, () => ReceiverOrigin.unknownValue);
+    result.putIfAbsent(
+      parameter,
+      () => forwarded[parameter.baseElement] ?? ReceiverOrigin.unknownValue,
+    );
   }
   return result;
 }

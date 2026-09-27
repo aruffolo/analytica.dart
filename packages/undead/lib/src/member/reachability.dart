@@ -65,6 +65,9 @@ Future<UndeadReport> analyzeMembers(
   final witnesses = <TestBlockSite, Set<String>>{};
   for (final entry in graph.testSites.entries) {
     final reachability = MemberReachability(graph)..addEdges(entry.value);
+    for (final fixture in graph.testFixtures[entry.key] ?? <MemberEdges>[]) {
+      reachability.addEdges(fixture);
+    }
     reachability.run(const {});
     witnesses[entry.key] = reachability.live;
   }
@@ -81,6 +84,7 @@ class MemberReachability {
   final Set<String> live = {};
   final Set<InterfaceElement> allocated = {};
   final Set<DispatchSlot> slots = {};
+  final Set<ConstructorCall> _constructorCalls = {};
   final Set<InterfaceElement> escaped = {};
   final List<String> _queue = [];
   final Set<InterfaceElement> _checkedProtocols = {};
@@ -102,6 +106,7 @@ class MemberReachability {
     }
     edges.direct.forEach(_add);
     slots.addAll(edges.slots);
+    _constructorCalls.addAll(edges.constructorCalls);
     for (final runtimeType in edges.runtimeTypes) {
       allocated.addAll(
         graph.implementations[elementKey(runtimeType)] ?? const {},
@@ -123,21 +128,31 @@ class MemberReachability {
   }
 
   void run(Set<String> roots) {
-    roots.forEach(_add);
+    for (final root in roots) {
+      _add(root);
+      if (graph.nodes[root]?.element case ExecutableElement element) {
+        _bindArguments(element, const []);
+        bindings.add('this#$root', ReceiverOrigin.unknownValue);
+      }
+    }
     var head = 0;
     while (true) {
       while (head < _queue.length) {
         addEdges(graph.nodes[_queue[head++]]!.edges);
       }
-      for (final type in allocated.toList()) {
-        if (allowAssumptions) {
-          _retainExternalOverrides(type);
-          _retainEscapedSurface(type);
-        }
-      }
+      _retainBoundaries();
       // Protocol/escape retention can enqueue bodies before dispatch begins.
       if (head != _queue.length || _dispatchAll()) continue;
       if (!allowAssumptions || !_dispatchAll(fallback: true)) break;
+    }
+  }
+
+  void _retainBoundaries() {
+    for (final type in allocated.toList()) {
+      if (allowAssumptions) {
+        _retainExternalOverrides(type);
+        _retainEscapedSurface(type);
+      }
     }
   }
 
@@ -147,6 +162,11 @@ class MemberReachability {
     final previousQueueLength = _queue.length;
     final previousSlotCount = slots.length;
     final previousBindings = bindings.revision;
+    for (final call in _constructorCalls) {
+      for (final constructor in bindings.resolve(call.target).constructors) {
+        _bindArguments(constructor, call.arguments);
+      }
+    }
     for (final slot in slots.toList()) {
       _dispatchSlot(slot, fallback: fallback);
     }
@@ -176,6 +196,9 @@ class MemberReachability {
       }
       _add(key);
       _bindTarget(target, type, slot.arguments);
+      if (slot.result case final result?) {
+        bindings.add(result, ReceiverOrigin(references: {'return#$key'}));
+      }
       _invokeGetterResult(target, slot);
     }
   }
@@ -210,6 +233,10 @@ class MemberReachability {
     List<CallArgument> arguments,
   ) {
     bindings.add('this#${elementKey(target)}', ReceiverOrigin(types: {type}));
+    _bindArguments(target, arguments);
+  }
+
+  void _bindArguments(ExecutableElement target, List<CallArgument> arguments) {
     for (final entry in callBindings(target, arguments).entries) {
       bindings.add(elementKey(entry.key), entry.value);
     }
@@ -260,6 +287,7 @@ class MemberReachability {
       final owner = element.enclosingElement;
       if (owner is! InterfaceElement || !_compatible(type, owner)) continue;
       _add(node.key);
+      if (element is! ConstructorElement) _bindTarget(element, type, const []);
       trace?.retain(node.key, 'externalEscape');
       graph.limitation(
         'externalEscape',
@@ -278,6 +306,7 @@ class MemberReachability {
     );
     for (final node in overrides) {
       _add(node.key);
+      _bindTarget(node.element as ExecutableElement, type, const []);
       trace?.retain(node.key, 'externalProtocol');
       graph.limitation(
         'externalProtocol',
@@ -326,11 +355,7 @@ class MemberReachability {
       );
       if (index < 0) continue;
       for (final mixin in applied.mixins.take(index).toList().reversed) {
-        final method = switch (slot.kind) {
-          DispatchKind.superGetter => mixin.element.getGetter(slot.name),
-          DispatchKind.superSetter => mixin.element.getSetter(slot.name),
-          _ => mixin.element.getMethod(slot.name),
-        };
+        final method = _concreteMixinMember(mixin.element, slot);
         if (method != null) return method;
       }
       final parent = applied.supertype?.element;
@@ -347,6 +372,22 @@ class MemberReachability {
             );
     }
     return null;
+  }
+
+  ExecutableElement? _concreteMixinMember(
+    InterfaceElement mixin,
+    DispatchSlot slot,
+  ) {
+    final member = switch (slot.kind) {
+      DispatchKind.superGetter => mixin.getGetter(slot.name),
+      DispatchKind.superSetter => mixin.getSetter(slot.name),
+      _ => mixin.getMethod(slot.name),
+    };
+    return member != null &&
+            !member.isAbstract &&
+            member.isAccessibleIn(slot.library)
+        ? member
+        : null;
   }
 
   ExecutableElement? _lookup(InterfaceElement type, DispatchSlot slot) =>
@@ -397,7 +438,7 @@ UndeadReport _report(
     final decl = node.declaration;
     findings.add(
       UndeadFinding(
-        id: '${decl.relativeFilePath}#${decl.kind.jsonValue}#${decl.name}',
+        id: node.reportId,
         name: decl.name,
         kind: decl.kind,
         file: decl.relativeFilePath,
@@ -434,7 +475,11 @@ List<UndeadFinding> _uncertainFindings(
   MemberReachability production,
   Set<String> explicit,
 ) {
-  final reasons = production.trace!.reasons(graph, production.live);
+  final reasons = production.trace!.reasons(
+    graph,
+    production.live,
+    production.bindings,
+  );
   final candidates = graph.nodes.values
       .where(
         (node) =>
@@ -450,7 +495,7 @@ List<UndeadFinding> _uncertainFindings(
     final retainedBy = (reasons[node.key] ?? const <String>{}).toList()..sort();
     findings.add(
       UndeadFinding(
-        id: '${decl.relativeFilePath}#${decl.kind.jsonValue}#${decl.name}',
+        id: node.reportId,
         name: decl.name,
         kind: decl.kind,
         file: decl.relativeFilePath,

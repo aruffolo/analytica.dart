@@ -1,5 +1,13 @@
 ## 0.1.2-wip
 
+- Preserve dispatched method/getter/callable return values, subclass receivers
+  during super/protocol calls and constructor chaining, forwarded constructor
+  arguments and known constructor tear-off calls, and extension-type calls.
+  Include lexically scoped test fixtures in member witnesses and distinguish
+  same-named members of unnamed extensions. Keep excluded tests and unselected
+  callback bodies out of independent witnesses, and explain uncertainty through
+  returned receivers.
+
 - Track receiver values at individual uses to find obsolete method bodies and
   their helpers after assignments, alias snapshots, loop writes and bounded
   callback execution. Preserve skipped null-aware effects and distinguish

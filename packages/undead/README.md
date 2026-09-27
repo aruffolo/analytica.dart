@@ -98,17 +98,31 @@ This is a conservative static model, not complete runtime analysis:
   inheritance, mixins and interfaces. Generic identity comes from the resolved
   declaration. Named local function bodies are traversed only when their
   function is reached, including calls and escaped tear-offs.
-- Bounded receiver origins follow local assignments, actual arguments and simple
-  returned values. Only reached callers contribute, and tests cannot widen
-  production receivers. Origins are unioned across branches and calls; this is
-  not a flow-sensitive or context-sensitive analysis. Unknown values, omitted
-  argument defaults and heap/global storage use conservative fallback.
+- Receiver origins follow actual arguments and simple returned values. Only
+  reached callers contribute, and tests cannot widen production receivers.
+  Bounded local flow analysis also tracks receiver values at individual uses:
+  assignments replace local values, aliases preserve copied values, and
+  alternatives are combined at branches and loop exits. Supported callbacks
+  observe captured values at invocation. Unknown receiver values use
+  conservative fallback. Known constructor tear-off calls forward actual
+  arguments; constructor calls through opaque storage, SDK/foreign callbacks and
+  implicit omitted defaults do not contribute precise argument origins. Methods
+  used only through these boundaries can still be reported as dead.
+- Async refinement is limited to supported local calls with a single suspension
+  on SDK `Future.value` with no argument or a primitive literal. Arbitrary
+  future completion, callback schedulers, repeated suspension, recursion,
+  unsupported control flow and work-budget exhaustion discard the local
+  refinement. This does not provide general object-storage or asynchronous
+  execution analysis.
 - Overrides of external protocols on allocated receivers are retained. This
   covers Flutter lifecycle hooks such as `createState`, `initState`, `build`,
   and `dispose`, but can retain overrides that the runtime never invokes.
 - Unknown selectors retain matching members on allocated receivers. Objects
-  exposed to arbitrary foreign code retain their public surface; SDK/Flutter
-  protocol hooks and supplied callbacks are modeled separately.
+  passed to arbitrary foreign code retain public surfaces according to their
+  static interface types. Erased dynamic arguments do not widen that retention.
+  SDK/Flutter protocol hooks and supplied callbacks are modeled separately.
+- Repeating the same mixin at multiple inheritance levels can leave a live
+  `super` target reported as dead. This dispatch limitation remains unresolved.
 - Property reads can retain method tear-offs; invocations can retain callable
   getters/fields and the `call` method of objects they return.
 - Reachable SDK JSON codec/encoder references retain `toJson` on allocated

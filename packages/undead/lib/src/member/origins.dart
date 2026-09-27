@@ -31,24 +31,36 @@ class ReceiverOrigins {
     InstanceCreationExpression(:final constructorName)
         when constructorName.element?.isFactory == false =>
       ReceiverOrigin(types: {constructorName.element!.enclosingElement}),
-    SimpleIdentifier(:final element) => _elementValue(element),
-    PrefixedIdentifier(:final element) => _elementValue(element),
-    PropertyAccess(:final propertyName) => _elementValue(propertyName.element),
+    ConstructorReference(:final constructorName)
+        when constructorName.element != null =>
+      ReceiverOrigin(constructors: {constructorName.element!}),
+    SimpleIdentifier(:final element) => _elementValue(element, expression),
+    PrefixedIdentifier(:final element) => _elementValue(element, expression),
+    PropertyAccess(:final propertyName) => _elementValue(
+      propertyName.element,
+      expression,
+    ),
     ParenthesizedExpression(:final expression) => _legacyValue(expression),
     AsExpression(:final expression) => _legacyValue(expression),
     ThisExpression() || SuperExpression() => implicitReceiver,
     ConditionalExpression(:final thenExpression, :final elseExpression) =>
       _union(_legacyValue(thenExpression), _legacyValue(elseExpression)),
-    MethodInvocation(:final methodName) => _returnValue(methodName.element),
-    FunctionExpressionInvocation(:final element) => _returnValue(element),
+    MethodInvocation(:final methodName) => _returnValue(
+      methodName.element,
+      expression,
+    ),
+    FunctionExpressionInvocation(:final element) => _returnValue(
+      element,
+      expression,
+    ),
     _ => ReceiverOrigin.unknownValue,
   };
 
-  ReceiverOrigin _elementValue(Element? element) {
+  ReceiverOrigin _elementValue(Element? element, Expression expression) {
     if (element is PropertyAccessorElement) {
       return element.isOriginVariable
-          ? _elementValue(element.variable)
-          : _returnValue(element);
+          ? _elementValue(element.variable, expression)
+          : _returnValue(element, expression);
     }
     if (element is VariableElement) {
       return ReceiverOrigin(references: {elementKey(element)});
@@ -56,12 +68,31 @@ class ReceiverOrigins {
     return ReceiverOrigin.unknownValue;
   }
 
-  ReceiverOrigin _returnValue(Element? element) => element == null
-      ? ReceiverOrigin.unknownValue
-      : ReceiverOrigin(references: {'return#${elementKey(element)}'});
+  ReceiverOrigin _returnValue(Element? element, [Expression? expression]) {
+    if (expression != null &&
+        element is ExecutableElement &&
+        !element.isStatic &&
+        element.enclosingElement is InterfaceElement &&
+        element.enclosingElement is! ExtensionTypeElement &&
+        !_isDirectSuper(expression)) {
+      return ReceiverOrigin(references: {graph.resultKey(expression)});
+    }
+    return element == null
+        ? ReceiverOrigin.unknownValue
+        : ReceiverOrigin(references: {'return#${elementKey(element)}'});
+  }
+
+  bool _isDirectSuper(Expression expression) {
+    if (source?.enclosingElement is MixinElement) return false;
+    return (expression is MethodInvocation &&
+            expression.realTarget is SuperExpression) ||
+        (expression is PropertyAccess &&
+            expression.realTarget is SuperExpression);
+  }
 
   ReceiverOrigin _union(ReceiverOrigin a, ReceiverOrigin b) => ReceiverOrigin(
     types: {...a.types, ...b.types},
+    constructors: {...a.constructors, ...b.constructors},
     references: {...a.references, ...b.references},
     unknown: a.unknown || b.unknown,
   );
@@ -74,20 +105,50 @@ class ReceiverOrigins {
     // Analyzer 12 represents arguments as expressions; 14 wraps them in
     // Argument nodes. Tokens and child expressions work across both APIs.
     final named = argument.beginToken.next?.lexeme == ':';
-    final expression = argument is Expression && !named
-        ? argument
-        : argument.childEntities.whereType<Expression>().lastOrNull;
+    final expression = argumentExpression(argument);
     return CallArgument(
       named ? argument.beginToken.lexeme : null,
       value(expression),
     );
   }
 
-  void bindCall(Element? target, List<CallArgument> arguments) {
+  static Expression? argumentExpression(AstNode argument) {
+    final named = argument.beginToken.next?.lexeme == ':';
+    return argument is Expression && !named
+        ? argument
+        : argument.childEntities.whereType<Expression>().lastOrNull;
+  }
+
+  void bindCall(
+    Element? target,
+    List<CallArgument> arguments, {
+    bool forwardSuperParameters = false,
+  }) {
     if (target is! ExecutableElement) return;
-    for (final entry in callBindings(target, arguments).entries) {
+    final forwarded = forwardSuperParameters
+        ? _superParameters()
+        : const <Element, ReceiverOrigin>{};
+    for (final entry in callBindings(
+      target,
+      arguments,
+      forwarded: forwarded,
+    ).entries) {
       edges.bind(elementKey(entry.key), entry.value);
     }
+  }
+
+  Map<Element, ReceiverOrigin> _superParameters() {
+    final constructor = source;
+    if (constructor is! ConstructorElement) return const {};
+    return {
+      for (final parameter
+          in constructor.formalParameters
+              .whereType<SuperFormalParameterElement>())
+        if (parameter.superConstructorParameter case final parent?)
+          parent.baseElement: ReceiverOrigin(
+            references: {elementKey(parameter)},
+          ),
+    };
   }
 
   void variable(VariableDeclaration node) {

@@ -101,10 +101,10 @@ packages/undead/
 ### 4.4 Step 4: Classification & Hazard Evaluation
 
 - Compares declarations in `lib/src/`:
-  - $D \notin \text{PRODUCTION\_LIVE} \land D \notin \text{TEST\_REACHABLE} \implies$
-    **Pure Undead** (Delete).
-  - $D \notin \text{PRODUCTION\_LIVE} \land D \in \text{TEST\_REACHABLE} \implies$
-    **Tested Undead**:
+  - $D \notin \text{PRODUCTION\_LIVE} \land D \notin \text{TEST\_REACHABLE}
+    \implies$ **Pure Undead** (Delete).
+  - $D \notin \text{PRODUCTION\_LIVE} \land D \in \text{TEST\_REACHABLE}
+    \implies$ **Tested Undead**:
     - If test block contains ONLY dead references $\implies$ Safe to delete test
       block.
     - If test block co-invokes live and dead code $\implies$ Flag
@@ -180,14 +180,28 @@ traversal also owns monotone receiver bindings. Allocation origins and lexical
 variable, actual-argument and return-value equations narrow individual selectors
 before unknown receivers fall back to compatible allocations. The binding
 revision participates in fixed-point convergence. Selector caches use only
-lookup shape, not call-site value flow. Missing actuals remain unknown;
-heap/global storage is not narrowed from its initializer alone. Compound updates
-invalidate a narrowed lexical receiver and use the analyzer read type for
-operator dispatch. Explicit super/redirecting calls forward argument origins.
-Candidate classification uses independent production/test results; test witness
-intersection considers callable execution rather than type or construction
-retention. Conservative external protocol retention is scoped to allocated
-receivers, never a global root for all overrides.
+lookup shape, not call-site value flow. Missing actuals and external root inputs
+remain unknown; heap/global storage is not narrowed from its initializer alone.
+Compound updates invalidate a narrowed lexical receiver and use the analyzer
+read type for operator dispatch. Explicit super/redirecting calls and
+redirecting factories forward argument origins, including implicit
+super-parameters; super calls and generative constructor chains also forward the
+actual receiver. Explicit super arguments and super-formals are combined before
+omitted parameters receive unknown origins. Constructor tear-off targets travel
+through existing origin bindings, including local aliases and parameters. Known
+calls bind their actual arguments. Constructor arguments arriving through
+untracked storage, foreign/SDK callbacks or implicit omitted defaults are not
+propagated; live methods reached only through those paths can be reported as
+dead. Those paths do not erase concrete inputs observed at modeled calls.
+Virtual call results collect returns from the implementations dispatched at that
+call site. Extension-type members resolve directly because their representation
+does not require a runtime allocation. Foreign escape retention uses the
+argument's static interface type; a dynamic argument does not widen retention to
+all compatible allocation origins. Candidate classification uses independent
+production/test results; test witness intersection considers callable execution
+rather than type or construction retention. Conservative external protocol
+retention is scoped to allocated receivers, never a global root for all
+overrides.
 
 Before connecting executable graph nodes, a bounded lexical transfer computes
 receiver values at individual expressions. Assignments replace the current local
@@ -246,6 +260,12 @@ helper chains. The list covers protocol/escape/JSON retention and unknown
 receiver fallback. A path supported independently of these assumptions
 suppresses uncertainty. This is a review surface, not evidence of deadness;
 ordinary counts and CLI failure status use only unreachable findings.
+
+Test witnesses include lifecycle fixtures and local registration bindings from
+the test's enclosing lexical scopes. Local callback aliases are followed only
+from the selected registration arguments. Sibling-group fixtures do not
+contribute to that witness, and fixture allocations remain separate from
+production reachability.
 
 Regression coverage includes paired live/dead examples, separate test
 allocations, same-name collisions, generic and part identities, constructors,

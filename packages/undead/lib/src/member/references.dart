@@ -29,6 +29,7 @@ class MemberReferences extends RecursiveAstVisitor<void> {
     bool direct = false,
     ReceiverOrigin? receiver,
     List<CallArgument> arguments = const [],
+    String? result,
   }) {
     if (raw == null) return;
     final element = raw.baseElement;
@@ -40,6 +41,7 @@ class MemberReferences extends RecursiveAstVisitor<void> {
           direct: direct,
           receiver: receiver,
           arguments: arguments,
+          result: result,
         );
       }
       return;
@@ -49,10 +51,13 @@ class MemberReferences extends RecursiveAstVisitor<void> {
       return;
     }
     if (element is ExecutableElement &&
-        _dispatch(element, direct, receiver, arguments)) {
+        _dispatch(element, direct, receiver, arguments, result)) {
       return;
     }
     origins.bindCall(element, arguments);
+    if (receiver != null && element is ExecutableElement && !element.isStatic) {
+      edges.bind('this#${elementKey(element)}', receiver);
+    }
     if (element is LocalVariableElement ||
         element is FormalParameterElement ||
         element is TypeParameterElement) {
@@ -108,6 +113,7 @@ class MemberReferences extends RecursiveAstVisitor<void> {
     bool direct,
     ReceiverOrigin? receiver,
     List<CallArgument> arguments,
+    String? result,
   ) {
     final sourceOwner = sourceElement?.enclosingElement;
     if (direct && sourceOwner is MixinElement) {
@@ -119,12 +125,16 @@ class MemberReferences extends RecursiveAstVisitor<void> {
           DispatchKind.of(element).asSuper,
           receiver: receiver ?? ReceiverOrigin.unknownValue,
           arguments: arguments,
+          result: result,
         ),
       );
       return true;
     }
     final owner = element.enclosingElement;
-    if (!element.isStatic && owner is InterfaceElement && !direct) {
+    if (!element.isStatic &&
+        owner is InterfaceElement &&
+        owner is! ExtensionTypeElement &&
+        !direct) {
       edges.slots.add(
         DispatchSlot(
           owner,
@@ -133,6 +143,7 @@ class MemberReferences extends RecursiveAstVisitor<void> {
           DispatchKind.of(element),
           receiver: receiver ?? ReceiverOrigin.unknownValue,
           arguments: arguments,
+          result: result,
         ),
       );
       return true;
@@ -158,27 +169,31 @@ class MemberReferences extends RecursiveAstVisitor<void> {
 
   @override
   void visitSimpleIdentifier(SimpleIdentifier node) {
-    if (!node.inDeclarationContext()) {
-      final parent = node.parent;
-      if (parent is MethodInvocation && parent.methodName == node) return;
-      final direct =
-          parent is PropertyAccess && parent.realTarget is SuperExpression;
-      final target = switch (parent) {
-        PropertyAccess(:final realTarget) => realTarget,
-        PrefixedIdentifier(:final prefix) => prefix,
-        _ => null,
-      };
-      reference(
-        node.element,
-        direct: direct,
-        receiver: target == null
-            ? origins.implicitReceiver
-            : origins.value(target),
-      );
-      if (node.element == null &&
-          (parent is PrefixedIdentifier || parent is PropertyAccess)) {
-        _dynamicProperty(node, origins.value(target));
-      }
+    if (node.inDeclarationContext()) return;
+    final parent = node.parent;
+    if (parent is MethodInvocation && parent.methodName == node) return;
+    final direct =
+        parent is PropertyAccess && parent.realTarget is SuperExpression;
+    final target = switch (parent) {
+      PropertyAccess(:final realTarget) => realTarget,
+      PrefixedIdentifier(:final prefix) => prefix,
+      _ => null,
+    };
+    reference(
+      node.element,
+      direct: direct,
+      receiver: target == null
+          ? origins.implicitReceiver
+          : origins.value(target),
+      result: graph.resultKey(
+        parent is PropertyAccess || parent is PrefixedIdentifier
+            ? parent as Expression
+            : node,
+      ),
+    );
+    if (node.element == null &&
+        (parent is PrefixedIdentifier || parent is PropertyAccess)) {
+      _dynamicProperty(node, origins.value(target));
     }
     super.visitSimpleIdentifier(node);
   }
@@ -238,11 +253,23 @@ class MemberReferences extends RecursiveAstVisitor<void> {
         ? origins.implicitReceiver
         : origins.value(node.realTarget);
     final arguments = origins.arguments(node.argumentList);
+    if (node.methodName.element is VariableElement ||
+        node.methodName.name == 'call' && node.realTarget != null) {
+      edges.constructorCalls.add(
+        ConstructorCall(
+          origins.value(
+            node.methodName.name == 'call' ? node.realTarget : node.methodName,
+          ),
+          arguments,
+        ),
+      );
+    }
     reference(
       node.methodName.element,
       direct: node.realTarget is SuperExpression,
       receiver: receiver,
       arguments: arguments,
+      result: graph.resultKey(node),
     );
     if (node.methodName.element == null && node.realTarget != null) {
       edges.slots.add(
@@ -282,15 +309,7 @@ class MemberReferences extends RecursiveAstVisitor<void> {
         uri?.scheme == 'dart' ||
         uri?.toString().startsWith('package:flutter/') == true;
     for (final argument in arguments) {
-      final expression = argument is Expression
-          ? argument
-          : argument.childEntities.whereType<Expression>().firstOrNull;
-      final type = expression?.staticType;
-      if (!protocolLibrary &&
-          type is InterfaceType &&
-          graph.nodes.containsKey(elementKey(type.element))) {
-        edges.escapedTypes.add(type.element);
-      }
+      _escapeArgument(argument, retainSurface: !protocolLibrary);
     }
     if (resultType is InterfaceType &&
         graph.nodes.containsKey(elementKey(resultType.element))) {
@@ -304,6 +323,17 @@ class MemberReferences extends RecursiveAstVisitor<void> {
         source?.declaration.line ?? 1,
         'External result conservatively admits compatible local receivers.',
       );
+    }
+  }
+
+  void _escapeArgument(AstNode argument, {required bool retainSurface}) {
+    final expression = ReceiverOrigins.argumentExpression(argument);
+    if (expression == null) return;
+    if (!retainSurface) return;
+    final type = expression.staticType;
+    if (type is InterfaceType &&
+        graph.nodes.containsKey(elementKey(type.element))) {
+      edges.escapedTypes.add(type.element);
     }
   }
 
@@ -323,10 +353,17 @@ class MemberReferences extends RecursiveAstVisitor<void> {
 
   @override
   void visitFunctionExpressionInvocation(FunctionExpressionInvocation node) {
+    edges.constructorCalls.add(
+      ConstructorCall(
+        origins.value(node.function),
+        origins.arguments(node.argumentList),
+      ),
+    );
     reference(
       node.element,
       receiver: origins.value(node.function),
       arguments: origins.arguments(node.argumentList),
+      result: graph.resultKey(node),
     );
     if (node.element == null && node.function.staticType is DynamicType) {
       edges.slots.add(
@@ -412,7 +449,11 @@ class MemberReferences extends RecursiveAstVisitor<void> {
 
   @override
   void visitSuperConstructorInvocation(SuperConstructorInvocation node) {
-    origins.bindCall(node.element, origins.arguments(node.argumentList));
+    origins.bindCall(
+      node.element,
+      origins.arguments(node.argumentList),
+      forwardSuperParameters: true,
+    );
     reference(node.element, direct: true);
     super.visitSuperConstructorInvocation(node);
   }
@@ -422,7 +463,7 @@ class MemberReferences extends RecursiveAstVisitor<void> {
     RedirectingConstructorInvocation node,
   ) {
     origins.bindCall(node.element, origins.arguments(node.argumentList));
-    reference(node.element);
+    reference(node.element, direct: true);
     super.visitRedirectingConstructorInvocation(node);
   }
 
